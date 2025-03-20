@@ -137,6 +137,8 @@ shaders:
 
 本来计划直接读取ps vs文件来解析的, 尝试用crate glsl解析ast, 发现支持不够完美. 为了避免可能存在的解析失败的情况, 采用yaml来声明ksh的结构. (例如, anim.ksh 里在块级里使用预处理指令就会解析失败)
 
+参考issue: https://github.com/hadronized/glsl/issues/117
+
 ## 贡献
 
 欢迎贡献代码！请 fork 本仓库并提交 pull request。

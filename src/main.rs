@@ -511,10 +511,16 @@ fn main() {
     if matches.contains_id("debug") {
         env_logger::Builder::from_default_env()
             .filter_level(log::LevelFilter::Debug)
+            .format(|buf, record| {
+                writeln!(buf, "{}: {}", record.level(), record.args())
+            })
             .init();
     } else {
         env_logger::Builder::from_default_env()
             .filter_level(log::LevelFilter::Info)
+            .format(|buf, record| {
+                writeln!(buf, "{}: {}", record.level(), record.args())
+            })
             .init();
     }
 
