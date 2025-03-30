@@ -448,7 +448,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ksh_analyze"
+name = "ksh-analyze"
 version = "1.0.0"
 dependencies = [
  "clap",

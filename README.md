@@ -1,6 +1,6 @@
-# ksh_analyze
+# ksh-analyze
 
-ksh_analyze 是一个用于分析和构建《饥荒联机版》着色器文件的工具。它可以直接从 .ksh 文件中提取着色器内容，也可以从 .vs 和 .ps 文件构建 .ksh 文件。
+ksh-analyze 是一个用于分析和构建《饥荒联机版》着色器文件的工具。它可以直接从 .ksh 文件中提取着色器内容，也可以从 .vs 和 .ps 文件构建 .ksh 文件。
 
 ## 功能说明
 
@@ -27,7 +27,7 @@ cargo build --release
 ### 命令
 
 ```
-用法: ksh_analyze.exe [OPTIONS] <输入路径> [第二个文件] [输出目录或文件]
+用法: ksh-analyze.exe [OPTIONS] <输入路径> [第二个文件] [输出目录或文件]
 
 Arguments:
   <输入路径>     输入路径，可以是：
