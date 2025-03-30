@@ -1,8 +1,16 @@
 # ksh_analyze
 
-ksh_analyze 是一个用于分析和构建《饥荒联机版》着色器文件的工具。
+ksh_analyze 是一个用于分析和构建《饥荒联机版》着色器文件的工具。它可以直接从 .ksh 文件中提取着色器内容，也可以从 .vs 和 .ps 文件构建 .ksh 文件。
 
-## 安装
+## 功能说明
+
+### 解析 ksh 文件
+- 从 .ksh 文件中提取顶点着色器（.vs）和像素着色器（.ps）的内容
+
+### 构建 ksh 文件
+- 支持从包含着色器文件的目录构建
+- 支持从两个独立的着色器文件构建
+## 源码构建
 
 首先，确保你已经安装了 Rust 和 Cargo。然后在项目根目录下运行以下命令来构建项目：
 
@@ -10,134 +18,74 @@ ksh_analyze 是一个用于分析和构建《饥荒联机版》着色器文件�
 cargo build --release
 ```
 
+## 直接下载使用
+
+直接下载release版本使用, 你可以把他适当的添加到你的环境变量
+
 ## 使用
 
-### 解析 ksh 文件
+### 命令
 
-将 .ksh 文件分析并转换为 .yaml 文件：
+```
+用法: ksh_analyze.exe [OPTIONS] <输入路径> [第二个文件] [输出目录或文件]
+
+Arguments:
+  <输入路径>     输入路径，可以是：
+             - .ksh 文件（用于分析）
+             - 包含 vs 和 ps 着色器文件的目录
+             - 两个着色器文件（vs 和 ps，顺序任意）
+  [第二个文件]    第二个着色器文件路径。仅在输入为着色器文件时需要。
+  [输出目录或文件]  输出路径。如果未指定，将使用当前目录。
+
+Options:
+  -d, --debug    启用调试日志以获取更详细的输出。
+  -f, --force    允许覆盖文件
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+是解析还是生成ksh文件模式, 是由命令的第一个参数决定的. 如果第一个参数是ksh的, 那么将解析. 否则生成
+
+### 解析 ksh 文件为着色器文件
+#### 将 .ksh 文件解析并提取着色器文件(.vs, .ps)：
+
+指定输入与输出目录：
 
 ```sh
-ksh_analyze input.ksh
+ksh-analyzer input.ksh output
 ```
 
-指定输出目录：
+
+### 从着色器文件构建 ksh 文件
+
+#### 从包含着色器文件的目录构建：
+
+程序会扫描输入文件夹, 自动查找里面的.vs, .ps文件, 并构建ksh文件.
+
+构建的ksh文件中的着色器, 将以输出的文件名命名着色器.
+
+输出允许忽略.ksh后缀, 程序会自动添加.ksh后缀.
 
 ```sh
-ksh_analyze input.ksh output_dir
+ksh-analyzer shader_dir output.ksh
 ```
 
-### 从yaml文件构建ksh文件
-
-将 .yaml 文件构建为 .ksh 文件：
+#### 从两个着色器文件构建（顺序任意）：
 
 ```sh
-ksh_analyze input.yaml
+ksh-analyzer input.vs input.ps output.ksh
 ```
 
-指定输出目录：
+### 命令行选项
 
-```sh
-ksh_analyze input.yaml output_dir
-```
+- `-d, --debug`: 启用调试日志以获取更详细的输出
+- `-f, --force`: 允许覆盖已存在的输出文件
 
-### 启用调试日志
+### 计划
 
-启用调试日志以获得更详细的输出：
-
-```sh
-ksh_analyze input.ksh --debug
-```
-
-## 构造ksh的yaml解构
-
-以下是 .yaml 文件的基本结构：
-
-```yaml
-version: 1
-shaders:
-  - vs:
-      file: <顶点着色器文件路径>
-      uniforms:
-        - <顶点着色器使用的uniform变量名>
-    ps:
-      file: <片段着色器文件名>
-      uniforms:
-        - <片段着色器使用的uniform变量名>
-    uniforms:
-      - name: <uniform变量名>
-        type: <uniform变量类型>
-        array_length: <数组长度，可选>
-        default_data: <默认数据，可选>
-```
-**字段说明**
-* shaders: 着色器配置列表。
-* vs: 顶点着色器配置。
-  * file: 顶点着色器文件路径。
-  * uniforms: 顶点着色器使用的 uniform 变量名列表。
-* ps: 片段着色器配置。
-  * file: 片段着色器文件路径。
-  * uniforms: 片段着色器使用的 uniform 变量名列表。
-* uniforms: uniform 变量配置列表。
-  * name: uniform 变量名。
-  * type: uniform 变量类型，可能的值包括 float, vec2, vec3, vec4, mat4, sampler2D。
-  * array_length: 数组长度（可选），如果是数组类型则需要指定。
-  * default_data: 默认数据（可选），如果有默认值则需要指定。
-
-**一个完整的yaml例子：**
-
-anim.ksh -> anim.yaml, anim.ps, anim.vs
-
-```yaml
-shaders:
-- vs:
-    file: anim.vs
-    uniforms:
-    - MatrixP
-    - MatrixV
-    - MatrixW
-    - TIMEPARAMS
-    - FLOAT_PARAMS
-  ps:
-    file: anim.ps
-    uniforms:
-    - SAMPLER
-    - LIGHTMAP_WORLD_EXTENTS
-    - COLOUR_XFORM
-    - PARAMS
-    - FLOAT_PARAMS
-    - OCEAN_BLEND_PARAMS
-    - OCEAN_WORLD_EXTENTS
-  uniforms:
-  - name: MatrixP
-    type: mat4
-  - name: MatrixV
-    type: mat4
-  - name: MatrixW
-    type: mat4
-  - name: TIMEPARAMS
-    type: vec4
-  - name: FLOAT_PARAMS
-    type: vec3
-  - name: SAMPLER
-    type: sampler2D
-    array_length: 5
-  - name: LIGHTMAP_WORLD_EXTENTS
-    type: vec4
-  - name: COLOUR_XFORM
-    type: mat4
-  - name: PARAMS
-    type: vec3
-  - name: OCEAN_BLEND_PARAMS
-    type: vec4
-  - name: OCEAN_WORLD_EXTENTS
-    type: vec4
-
-```
-## 为什么构造ksh需要yaml来声明?
-
-本来计划直接读取ps vs文件来解析的, 尝试用crate glsl解析ast, 发现支持不够完美. 为了避免可能存在的解析失败的情况, 采用yaml来声明ksh的结构. (例如, anim.ksh 里在块级里使用预处理指令就会解析失败)
-
-参考issue: https://github.com/hadronized/glsl/issues/117
+✅ 解析与生成ksh文件
+✅ 移除yaml格式的配置
+❌ 除了命令行, 额外支持ui界面
 
 ## 贡献
 
