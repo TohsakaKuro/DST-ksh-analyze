@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "dst-ksh-analyze",
+  "version": "0.1.0",
+  "identifier": "dst-ksh-analyze",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist",
+    "features": ["cli"]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "饥荒着色器文件解析器",
+        "width": 1000,
+        "height": 700,
+        "backgroundColor": "#1e1e1e",
+        "visible": true,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/64x64.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

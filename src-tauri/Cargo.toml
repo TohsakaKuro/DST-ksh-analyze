@@ -1,0 +1,36 @@
+[package]
+name = "dst-ksh-analyze"
+version = "2.0.0"
+description = "饥荒联机版着色器文件分析工具"
+authors = ["TohsakaKuro<tohsakakuro@outlook.com>"]
+edition = "2021"
+
+[features]
+default = []
+cli = []
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "dst_ksh_analyze_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+clap = { version = "4.5.32", features = ["derive"] }
+env_logger = "0.11.5"
+log = "0.4.22"
+glsl-lang = { version = "0.7.2", features = ["lexer-v2-full"] }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+
