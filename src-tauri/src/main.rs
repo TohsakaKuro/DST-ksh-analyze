@@ -1,5 +1,5 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(all(not(debug_assertions), not(feature = "cli")), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod core;
 mod glsl_parser;
 mod types;
@@ -11,8 +11,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Mutex;
-use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ShaderInfo {
@@ -173,8 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = match matches.get_one::<String>("path1") {
         Some(input) => input,
         None => {
-            dst_ksh_analyze_lib::run();
-            return Ok(());
+            return Err("需要指定输入路径".into());
         }
     };
     let input_path = Path::new(input);

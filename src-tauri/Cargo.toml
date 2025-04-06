@@ -5,10 +5,6 @@ description = "饥荒联机版着色器文件分析工具"
 authors = ["TohsakaKuro<tohsakakuro@outlook.com>"]
 edition = "2021"
 
-[features]
-default = []
-cli = []
-
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
