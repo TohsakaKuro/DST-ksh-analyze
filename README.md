@@ -2,6 +2,13 @@
 
 dst-ksh-analyze 是一个用于分析和构建《饥荒联机版》着色器文件的工具。它可以直接从 .ksh 文件中提取着色器内容，也可以从 .vs 和 .ps 文件构建 .ksh 文件。支持命令行和图形界面两种使用方式。
 
+## 仓库地址
+
+[仓库地址: https://github.com/TohsakaKuro/DST-ksh-analyze](https://github.com/TohsakaKuro/DST-ksh-analyze)
+
+欢迎贡献代码！请 fork 本仓库并提交 pull request。
+
+
 ## 功能说明
 
 ### 解析 ksh 文件
@@ -127,10 +134,6 @@ ksh-analyzer input.vs input.ps output.ksh
 ✅ 除了命令行, 额外支持ui界面
 ❌ 支持着色器代码格式化
 ❌ 支持着色器语法检查
-
-## 贡献
-
-欢迎贡献代码！请 fork 本仓库并提交 pull request。
 
 ## 许可证
 
