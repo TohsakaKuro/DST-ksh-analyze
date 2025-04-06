@@ -76,6 +76,48 @@ npm run tauri build
 ❌ 支持着色器代码格式化
 ❌ 支持着色器语法检查
 
+## 相关组件
+
+本项目使用了以下开源组件：
+
+### 前端组件
+- **Vue.js** (v3.5.13) - 渐进式JavaScript框架
+  - 许可证: MIT
+  - 项目地址: https://github.com/vuejs/vue
+
+- **Monaco Editor** (v0.52.2) - 基于VS Code的代码编辑器
+  - 许可证: MIT
+  - 项目地址: https://github.com/microsoft/monaco-editor
+
+- **Vite** (v6.0.3) - 下一代前端构建工具
+  - 许可证: MIT
+  - 项目地址: https://github.com/vitejs/vite
+
+### Tauri相关
+- **Tauri** (v2) - 用于构建跨平台桌面应用的框架
+  - 许可证: MIT
+  - 项目地址: https://github.com/tauri-apps/tauri
+
+- **Tauri插件**
+  - **tauri-plugin-dialog** (v2.2.1) - 对话框插件
+  - **tauri-plugin-fs** (v2.2.1) - 文件系统插件
+  - **tauri-plugin-opener** (v2.2.6) - 文件打开插件
+  - 许可证: MIT
+  - 项目地址: https://github.com/tauri-apps/plugins-workspace
+
+### Rust组件
+- **clap** (v4.5.32) - 命令行参数解析库
+  - 许可证: MIT
+  - 项目地址: https://github.com/clap-rs/clap
+
+- **glsl-lang** (v0.7.2) - GLSL语言解析库
+  - 许可证: BSD 3-Clause
+  - 项目地址: https://github.com/alixinne/glsl-lang
+
+- **serde** (v1) - 序列化/反序列化框架
+  - 许可证: MIT
+  - 项目地址: https://github.com/serde-rs/serde
+
 ## 许可证
 
 此项目使用 BSD 3-Clause 许可证。详情请参阅 [LICENSE](./LICENSE) 文件。

@@ -65,7 +65,7 @@ export default defineConfig(async () => ({
           // Vue 相关
           'vue': ['vue'],
           // 其他依赖
-          'vendor': ['prismjs']
+          'vendor': []
         },
         // 优化静态资源
         assetFileNames: (assetInfo) => {
