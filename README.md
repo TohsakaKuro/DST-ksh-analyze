@@ -49,7 +49,7 @@ npm run tauri build
 
 ### 图形界面
 
-直接双击运行程序，将打开图形界面。界面主要功能：
+直接双击 `dst-ksh-analyze`，将打开图形界面。界面主要功能：
 
 1. 文件操作
    - 从 KSH 导入：打开 KSH 文件并提取着色器代码
@@ -68,13 +68,30 @@ npm run tauri build
    - 文件修改状态提示
    - 保存提醒对话框
 
+### 命令行（CLI）
+
+CLI 已独立为单独产物 `dst-ksh-analyze-cli`，不再与 UI 共用同一个入口。
+
+常用示例：
+
+```sh
+# 分析 .ksh 到目录
+dst-ksh-analyze-cli input.ksh output_dir
+
+# 从目录构建 .ksh
+dst-ksh-analyze-cli shader_dir output.ksh
+
+# 从两个着色器文件构建 .ksh
+dst-ksh-analyze-cli input.vs input.ps output.ksh
+```
+
 ### 计划
 
 ✅ 解析与生成ksh文件
 ✅ 移除yaml格式的配置
 ✅ 除了命令行, 额外支持ui界面
 ❌ 支持着色器代码格式化
-❌ 支持着色器语法检查
+✅ 支持着色器语法检查
 
 ## 相关组件
 
