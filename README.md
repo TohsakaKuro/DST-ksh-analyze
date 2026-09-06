@@ -32,12 +32,16 @@ dst-ksh-analyze 是一个用于分析和构建《饥荒联机版》着色器文�
 KSH 的“可编码类型”也不等于当前 DST 的“可运行类型”。当前 Windows 客户端动态上传只确认类型码 `0..8`、`10`、`15`、`20`，sampler `42..45` 走另一条绑定路径；但当前 GLES2 源码实际应优先使用 `float`、`vec2/3/4`、`mat2/3/4`、`sampler2D` 和 `samplerCube`。整数类型、非方阵及 `sampler1D/3D` 可用于容器研究和无损处理，不应在没有运行验证时当作可用的模组 shader 类型。
 
 ### 图形界面功能
-- 内置代码编辑器，支持 GLSL 语法高亮
-- 支持 VS/PS 标签页切换编辑
-- 支持从 KSH 文件导入和导出
-- 导入后再导出时保留兼容的 effect、uniform 默认值、未知类型/scope 和阶段索引
-- 支持独立保存 VS/PS 文件
-- 支持代码注释、撤销/重做等编辑功能
+
+- 启动时为空，使用 Fluent UI 菜单与按钮、独立文件标签和 Monaco 编辑器
+- 可同时打开多份 `.vs`、`.ps`、`.glsl`、`.txt` 源码；打开 KSH 会追加两份独立源码标签
+- `Ctrl+S` 保存当前文件，另有“全部保存”；每个标签可单独关闭，修改标记和未保存确认按文件管理
+- 导出时从已打开文件中各选一个 VS 和 PS，再通过系统保存窗口确定输出文件名；无需填写内部名称
+- 同源 KSH 的原始 VS/PS 组合保留兼容的 uniform 默认值、未知类型/scope 和阶段索引；跨来源组合在确认后重建元数据
+- 支持任意两个已打开文件并排编辑，不固定绑定 VS/PS；切换标签保留各自撤销历史和光标位置
+- 支持代码注释、撤销/重做、查找和替换
+
+当前界面集中于源码编辑与文件操作，不包含 uniform 参数面板、诊断面板或编辑时的实时语法检查。打开、保存和构建失败仍会显示错误信息；编辑器内实时渲染预览尚未实现。
 
 ## 源码构建
 
@@ -60,8 +64,8 @@ npm run tauri build
 在项目根目录运行：
 
 ```sh
-# 前端文件操作回归测试，直接执行 App.vue 中的真实逻辑
-node --test tests/editor-file-operations.test.mjs
+# 文档状态与文件操作流程回归测试
+node --test tests/editor-file-operations.test.mjs tests/document-actions.test.mjs
 
 # Rust 测试；release 模式也需检查，避免依赖 debug_assert 的副作用
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features
@@ -73,9 +77,24 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -
 npm run build
 ```
 
-Rust 测试包含合成格式样例和本机官方 KSH 样本的逐字节往返检查。官方样本目录不存在时，该部分会跳过；普通测试通过不表示已检查官方样本。前端测试模拟文件对话框、文件系统和编辑器依赖，不代替原生界面手工测试。以上检查均不启动游戏，也不能证明 shader 在游戏中能够编译、链接和正确渲染。
+Rust 测试包含合成格式样例、独立 CLI 进程测试和本机官方 KSH 样本的逐字节往返检查。官方样本目录不存在时，该部分会跳过；普通测试通过不表示已检查官方样本。前端测试直接验证文档状态模块，并通过模拟文件接口和对话框验证文件操作流程，不代替原生界面手工测试。以上检查均不启动游戏，也不能证明 shader 在游戏中能够编译、链接和正确渲染。
 
-本阶段修复、验证结果与后续预览器边界见 [阶段报告](.Codex/parser-builder-validation-2026-09-07.md)。
+可选的浏览器交互测试使用真实 Vue、Fluent 和 Monaco，仅模拟原生对话框及文件 IO，不读写真实着色器文件。运行环境需要能解析 `playwright` 模块，并已安装 Microsoft Edge：
+
+```sh
+# 第一个终端：构建并启动页面
+npm run build
+npm run preview -- --host 127.0.0.1 --port 1420
+```
+
+```sh
+# 页面启动后，在另一个终端运行
+node tests/workbench-ui-smoke.cjs
+```
+
+可通过环境变量调整：`PLAYWRIGHT_MODULE` 指向现有 Playwright 模块的绝对路径，`SHADER_UI_URL` 指定页面地址（默认 `http://127.0.0.1:1420`），`SHADER_UI_BROWSER` 指定已安装的浏览器通道（默认 `msedge`）。截图写入 `SHADER_UI_OUTPUT` 指定目录；未指定时在系统临时目录下创建独立目录。端口已占用时为页面选择其他端口，并同步设置 `SHADER_UI_URL`。
+
+解析与构建的历史验证记录见 [阶段报告](.Codex/parser-builder-validation-2026-09-07.md)，当前前端模块边界与预览接入约定见 [工作台架构](.Codex/workbench-architecture.md)。
 
 ## 直接下载使用
 
@@ -85,24 +104,20 @@ Rust 测试包含合成格式样例和本机官方 KSH 样本的逐字节往返�
 
 ### 图形界面
 
-直接双击 `dst-ksh-analyze`，将打开图形界面。界面主要功能：
+双击 `dst-ksh-analyze` 启动空白工作台。主界面以独立源码文件为单位，不维护一个固定的 KSH 文档或 VS/PS 配对。
 
-1. 文件操作
-   - 从 KSH 导入：打开 KSH 文件并提取着色器代码
-   - 导出到 KSH：将当前编辑的着色器代码保存为 KSH 文件
-   - 打开/保存：独立打开或保存 VS/PS 文件
+1. 使用 `Ctrl+N` 新建未命名文件，或通过“文件 → 打开文件”/ `Ctrl+O` 同时打开多份源码和 KSH。打开操作追加标签，不替换已有编辑；重复打开同一路径会切换到原标签。
+2. 标签显示源码文件名、修改标记和关闭按钮。`Ctrl+Tab` / `Ctrl+Shift+Tab` 切换标签，`Ctrl+W` 或鼠标中键关闭标签；“文件 → 关闭全部”关闭所有文件。并排时点击编辑区确定焦点，再选标签可切换该侧文件。
+3. `Ctrl+S` 只保存当前文件，`Ctrl+Shift+S` 另存为；“全部保存”逐一保存未保存的文件。未命名文件通过系统窗口选择路径，未指定扩展名时使用 `.glsl`。源码支持 `.vs`、`.ps`、`.glsl` 和 `.txt`，不会因语法尚未完成而拒绝保存。
+4. 使用“导出 KSH”或 `Ctrl+Shift+E`，在两个单选列表中各选一份 VS、PS，然后选择输出路径。`.vs` / `.ps` 默认按扩展名分类，通用 `.glsl`、`.txt` 和未命名文件可按需分配阶段；同一个文件不能同时承担两阶段。已有多个候选时需明确选择。
 
-2. 编辑功能
-   - 支持 GLSL 语法高亮
-   - 代码注释/取消注释（Ctrl + /）
-   - 撤销/重做（Ctrl + Z / Ctrl + Y）
-   - 查找/替换（Ctrl + F）
+导出读取所选标签的当前内容，不要求先保存源码，但不会清除源码修改标记。关闭有未保存内容的标签时可保存、放弃或取消；打开 KSH 所产生的非空源码标签尚无独立保存路径，也会提醒保存。空白未命名文件可直接关闭。“全部保存”中途取消或失败时，已经成功保存的文件保持已保存，其余标签保留。
 
-3. 界面特性
-   - VS/PS 标签页切换
-   - 支持修改着色器名称
-   - 文件修改状态提示
-   - 保存提醒对话框
+桌面导出的名称全部由输出文件名决定。例如 `glow.ksh` 自动写入 effect `glow`、内嵌名称 `glow.vs` 和 `glow.ps`，包括从 KSH 导入后再次导出的情况。源码标签及磁盘文件名不变。旧构建接口未启用 `name_from_output` 时仍保留原来的命名约定。
+
+导入来源仅作为内部元数据关联。同一次导入的原始 VS/PS 组合会保留兼容元数据；跨 KSH、导入源码与普通文件混搭、关闭某阶段后从新一次导入补回等情况，会在导出前提醒按源码重建参数表。不会猜测合并不同 KSH 的默认值。
+
+浏览器开发页面可用于检查布局和编辑器交互；本地文件读写及原生文件选择需要通过 Tauri 桌面应用运行。
 
 ### 命令行（CLI）
 
@@ -123,12 +138,9 @@ dst-ksh-analyze-cli input.vs input.ps output.ksh
 
 ### 计划
 
-✅ 解析与生成ksh文件
-✅ 移除yaml格式的配置
-✅ 除了命令行, 额外支持ui界面
-❌ 编辑器内实时渲染着色器预览
-❌ 支持着色器代码格式化
-✅ 支持着色器语法检查
+- 已实现：KSH 解析与构建、独立 CLI、多文件源码工作台与组合导出。
+- 后续实验：编辑器内实时渲染预览、着色器代码格式化。
+- 当前不提供编辑时实时语法检查；构建器的解析与格式校验范围见上文。
 
 ## 相关组件
 
@@ -142,6 +154,14 @@ dst-ksh-analyze-cli input.vs input.ps output.ksh
 - **Monaco Editor** (v0.52.2) - 基于VS Code的代码编辑器
   - 许可证: MIT
   - 项目地址: https://github.com/microsoft/monaco-editor
+
+- **Fluent UI Web Components** (v3.1.3) - Microsoft 的界面组件，用于菜单、按钮、对话框和消息提示
+  - 许可证: MIT
+  - 项目地址: https://github.com/microsoft/fluentui/tree/master/packages/web-components
+
+- **Lucide Vue** (`@lucide/vue`, v1.41.0) - 工作台工具栏和操作按钮的图标
+  - 许可证: ISC
+  - 项目地址: https://github.com/lucide-icons/lucide/tree/main/packages/vue
 
 - **Vite** (v6.0.3) - 下一代前端构建工具
   - 许可证: MIT

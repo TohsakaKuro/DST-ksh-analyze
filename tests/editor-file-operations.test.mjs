@@ -1,302 +1,224 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { runInNewContext } from 'node:vm';
-import { babelParse, parse } from '@vue/compiler-sfc';
+import { useEditorWorkspace } from '../src/composables/useEditorWorkspace.js';
+import { extension, sourceFilePath, pathKey, stageFileName } from '../src/utils/file-paths.js';
 
-const appPath = new URL('../src/App.vue', import.meta.url);
-const { descriptor, errors } = parse(readFileSync(appPath, 'utf8'));
-assert.equal(errors.length, 0);
-const source = descriptor.scriptSetup.content;
-const ast = babelParse(source, { sourceType: 'module' });
-// Execute the real component functions, replacing only browser/Tauri dependencies.
-const executable = ast.program.body
-  .filter(node => node.type !== 'ImportDeclaration')
-  .map(node => source.slice(node.start, node.end)).join('\n');
-const exposedNames = [
-  'psEditor', 'vsEditor', 'psName', 'vsName', 'psModified', 'vsModified',
-  'psSavePoint', 'vsSavePoint', 'psNameSavePoint', 'vsNameSavePoint',
-  'currentPsPath', 'currentVsPath', 'currentKshPath', 'baseKshPath',
-  'showError', 'showConfirm', 'currentSaveFile', 'pendingOperation',
-  'setupEditorChangeListener', 'refreshModified', 'handleSave', 'handleSaveAs',
-  'handleSaveKsh', 'doOpenPs', 'doOpenVs', 'doOpenKsh',
-  'runAfterSavePrompts', 'handleConfirmAction',
-];
-
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
-}
-
-async function settle() {
-  await new Promise(resolve => setImmediate(resolve));
-}
-
-function createApp(overrides = {}) {
-  const calls = {};
-  const context = {
-    ref: value => ({ value }),
-    shallowRef: value => ({ value }),
-    onMounted: () => {},
-    onUnmounted: () => {},
-    nextTick: callback => Promise.resolve().then(callback),
-    setTimeout: callback => queueMicrotask(callback),
-    self: {},
-    getCurrentWindow: () => ({}),
+export function fixture() {
+  return {
+    vs: { name: 'effect.vs', content: 'vertex source' },
+    ps: { name: 'effect.ps', content: 'pixel source' },
+    metadata: { effect_name: 'original', uniforms: [{ name: 'OPAQUE', default_data: [0x80000000, 0x7fc01234, 0xffffffff] }],
+      vertex: { source_name: 'effect.vs', source: 'vertex source', uniform_indices: [0] },
+      pixel: { source_name: 'effect.ps', source: 'pixel source', uniform_indices: [] } },
   };
-  for (const name of ['openFileDialog', 'saveFileDialog', 'readFile', 'writeFile', 'analyzeKsh', 'buildKsh']) {
-    calls[name] = [];
-    context[name] = (...args) => {
-      calls[name].push(args);
-      if (!overrides[name]) throw new Error(`Unexpected ${name} call`);
-      return overrides[name](...args);
-    };
-  }
-  const app = runInNewContext(`${executable}\n({ ${exposedNames.join(', ')} });`, context, {
-    filename: appPath.pathname,
-  });
-  const stages = {};
-  for (const stage of ['ps', 'vs']) {
-    const prefix = stage === 'ps' ? 'Ps' : 'Vs';
-    let content = `original ${stage}`;
-    let changed = () => {};
-    const editor = {
-      getValue: () => content,
-      setValue: value => { content = value; changed(); },
-      onDidChangeModelContent: callback => { changed = callback; },
-    };
-    app[`${stage}Editor`].value = editor;
-    app[`${stage}SavePoint`].value = content;
-    app.setupEditorChangeListener(editor, stage === 'ps');
-    stages[stage] = {
-      editor,
-      name: app[`${stage}Name`],
-      modified: app[`${stage}Modified`],
-      savePoint: app[`${stage}SavePoint`],
-      nameSavePoint: app[`${stage}NameSavePoint`],
-      path: app[`current${prefix}Path`],
-      open: app[`doOpen${prefix}`],
-      edit: value => editor.setValue(value),
-    };
-  }
-  return { app, stages, calls };
 }
 
-const importedKsh = {
-  ps: { name: 'loaded.ps', content: 'loaded ps' },
-  vs: { name: 'loaded.vs', content: 'loaded vs' },
-};
-
-for (const stage of ['ps', 'vs']) {
-  for (const success of [false, true]) {
-    test(`${stage}: ${success ? 'successful' : 'failed'} open during Save As preserves the correct document`, async () => {
-      const write = deferred();
-      const { app, stages, calls } = createApp({
-        saveFileDialog: () => `C:/saved/saved.${stage}`,
-        writeFile: () => write.promise,
-        openFileDialog: () => `C:/loaded/loaded.${stage}`,
-        readFile: () => success ? `loaded ${stage}` : Promise.reject(new Error('read failed')),
-      });
-      const current = stages[stage];
-      current.edit(`submitted ${stage}`);
-      const save = app.handleSaveAs(stage);
-      await settle();
-      assert.equal(calls.writeFile.length, 1);
-      await current.open();
-      assert.equal(app.showError.value, !success);
-      write.resolve();
-      assert.equal(await save, true);
-      assert.equal(current.path.value, `C:/${success ? 'loaded/loaded' : 'saved/saved'}.${stage}`);
-      assert.equal(current.editor.getValue(), `${success ? 'loaded' : 'submitted'} ${stage}`);
-      assert.equal(current.savePoint.value, current.editor.getValue());
-      assert.equal(current.name.value, success ? 'loaded' : 'saved');
-      assert.equal(current.nameSavePoint.value, current.name.value);
-      assert.equal(current.modified.value, false);
-    });
-  }
-
-  test(`${stage}: edits made while saving remain dirty`, async () => {
-    const write = deferred();
-    const { app, stages } = createApp({
-      saveFileDialog: () => `C:/saved/saved.${stage}`,
-      writeFile: () => write.promise,
-    });
-    const current = stages[stage];
-    current.edit('submitted');
-    const save = app.handleSaveAs(stage);
-    await settle();
-    current.edit('newer edit');
-    write.resolve();
-    await save;
-    assert.equal(current.editor.getValue(), 'newer edit');
-    assert.equal(current.savePoint.value, 'submitted');
-    assert.equal(current.modified.value, true);
-  });
-
-  test(`${stage}: successive writes are serialized and the latest save point wins`, async () => {
-    const firstWrite = deferred();
-    const secondWrite = deferred();
-    let writes = 0;
-    const { app, stages, calls } = createApp({
-      writeFile: () => (++writes === 1 ? firstWrite.promise : secondWrite.promise),
-    });
-    const current = stages[stage];
-    current.path.value = `C:/saved/shader.${stage}`;
-    current.edit('first');
-    const firstSave = app.handleSave(stage);
-    await settle();
-    current.edit('second');
-    const secondSave = app.handleSave(stage);
-    await settle();
-    assert.equal(calls.writeFile.length, 1);
-    firstWrite.resolve();
-    await firstSave;
-    await settle();
-    assert.equal(calls.writeFile.length, 2);
-    assert.equal(current.modified.value, true);
-    assert.equal(current.savePoint.value, `original ${stage}`);
-    secondWrite.resolve();
-    await secondSave;
-    assert.equal(calls.writeFile[1][1], 'second');
-    assert.equal(current.savePoint.value, 'second');
-    assert.equal(current.modified.value, false);
-  });
-}
-
-for (const kind of ['ps', 'vs', 'ksh']) {
-  for (const phase of ['dialog', 'read']) {
-    for (const change of ['content', 'name']) {
-      test(`${kind}: ${change} changes during ${phase} prevent a stale load`, async () => {
-        const wait = deferred();
-        const target = kind === 'vs' ? 'vs' : 'ps';
-        const payload = kind === 'ksh' ? importedKsh : `loaded ${kind}`;
-        const { app, stages, calls } = createApp({
-          openFileDialog: () => phase === 'dialog' ? wait.promise : `C:/loaded/loaded.${kind}`,
-          readFile: () => phase === 'read' ? wait.promise : payload,
-          analyzeKsh: () => phase === 'read' ? wait.promise : payload,
-        });
-        const opening = kind === 'ksh' ? app.doOpenKsh() : stages[kind].open();
-        await settle();
-        if (change === 'content') {
-          stages[target].edit('newer edit');
-        } else {
-          stages[target].name.value = 'renamed';
-          app.refreshModified(target);
-        }
-        wait.resolve(phase === 'dialog' ? `C:/loaded/loaded.${kind}` : payload);
-        await opening;
-        assert.equal(stages[target].editor.getValue(), change === 'content' ? 'newer edit' : `original ${target}`);
-        assert.equal(stages[target].name.value, change === 'name' ? 'renamed' : 'shader');
-        assert.equal(stages[target].path.value, '');
-        assert.equal(stages[target].savePoint.value, `original ${target}`);
-        assert.equal(stages[target].modified.value, true);
-        assert.equal(app.currentKshPath.value, '');
-        assert.equal(app.showError.value, true);
-        if (phase === 'dialog') assert.equal(calls.readFile.length + calls.analyzeKsh.length, 0);
-      });
-    }
-  }
-
-  for (const success of [false, true]) {
-    test(`${kind}: ${success ? 'successful' : 'failed'} open during KSH export preserves the correct save points`, async () => {
-      const build = deferred();
-      const { app, stages, calls } = createApp({
-        saveFileDialog: () => 'C:/saved/saved.ksh',
-        buildKsh: () => build.promise,
-        openFileDialog: () => `C:/loaded/loaded.${kind}`,
-        readFile: () => success ? `loaded ${kind}` : Promise.reject(new Error('read failed')),
-        analyzeKsh: () => success ? importedKsh : Promise.reject(new Error('analysis failed')),
-      });
-      stages.ps.edit('submitted ps');
-      stages.vs.edit('submitted vs');
-      const save = app.handleSaveKsh();
-      await settle();
-      assert.equal(calls.buildKsh.length, 1);
-      await (kind === 'ksh' ? app.doOpenKsh() : stages[kind].open());
-      assert.equal(app.showError.value, !success);
-      build.resolve();
-      await save;
-      const kshPath = success ? (kind === 'ksh' ? 'C:/loaded/loaded.ksh' : '') : 'C:/saved/saved.ksh';
-      assert.equal(app.currentKshPath.value, kshPath);
-      assert.equal(app.baseKshPath.value, kshPath);
-      for (const stage of !success || kind === 'ksh' ? ['ps', 'vs'] : [kind]) {
-        assert.equal(stages[stage].savePoint.value, `${success ? 'loaded' : 'submitted'} ${stage}`);
-        assert.equal(stages[stage].modified.value, false);
-      }
-    });
-  }
-}
-
-for (const success of [false, true]) {
-  test(`KSH import ${success ? 'success invalidates' : 'failure preserves'} both pending stage saves`, async () => {
-    const write = deferred();
-    const { app, stages, calls } = createApp({
-      saveFileDialog: options => options.filters[0].extensions[0] === 'ps' ? 'C:/saved/saved.ps' : 'C:/saved/saved.vs',
-      writeFile: () => write.promise,
-      openFileDialog: () => 'C:/loaded/loaded.ksh',
-      analyzeKsh: () => success ? importedKsh : Promise.reject(new Error('analysis failed')),
-    });
-    stages.ps.edit('submitted ps');
-    stages.vs.edit('submitted vs');
-    const saves = [app.handleSaveAs('ps'), app.handleSaveAs('vs')];
-    await settle();
-    assert.equal(calls.writeFile.length, 2);
-    await app.doOpenKsh();
-    write.resolve();
-    await Promise.all(saves);
-    for (const stage of ['ps', 'vs']) {
-      assert.equal(stages[stage].path.value, success ? '' : `C:/saved/saved.${stage}`);
-      assert.equal(stages[stage].savePoint.value, `${success ? 'loaded' : 'submitted'} ${stage}`);
-      assert.equal(stages[stage].name.value, success ? 'loaded' : 'saved');
-      assert.equal(stages[stage].modified.value, false);
-    }
-  });
-}
-
-test('the save queue prompts for a stage that became dirty after the operation started', async () => {
-  const { app, stages } = createApp();
-  let executions = 0;
-  stages.ps.edit('first ps edit');
-  await app.runAfterSavePrompts(() => { executions += 1; }, ['ps', 'vs']);
-  assert.equal(app.currentSaveFile.value, 'shader.ps');
-  stages.vs.edit('new vs edit');
-  await app.handleConfirmAction('discard');
-  assert.equal(executions, 0);
-  assert.equal(app.showConfirm.value, true);
-  assert.equal(app.currentSaveFile.value, 'shader.vs');
-  await app.handleConfirmAction('discard');
-  assert.equal(executions, 1);
-  assert.equal(app.pendingOperation.value, null);
+test('workspace starts completely empty', () => {
+  const workspace = useEditorWorkspace();
+  assert.deepEqual(workspace.state.documents, []);
+  assert.equal(workspace.active.value, null);
+  assert.equal(workspace.hasUnsavedChanges.value, false);
+  assert.equal(workspace.split.value, false);
 });
 
-test('discard confirmation does not discard changes made while it was displayed', async () => {
-  const { app, stages } = createApp();
-  let executions = 0;
-  stages.ps.edit('first edit');
-  await app.runAfterSavePrompts(() => { executions += 1; }, ['ps']);
-  stages.ps.edit('newer edit');
-  await app.handleConfirmAction('discard');
-  assert.equal(executions, 0);
-  assert.equal(app.showConfirm.value, true);
-  await app.handleConfirmAction('discard');
-  assert.equal(executions, 1);
+test('new files are independent, unnamed and initially clean', () => {
+  const workspace = useEditorWorkspace();
+  const first = workspace.addSource();
+  const second = workspace.addSource();
+  assert.equal(first.name, '未命名-1');
+  assert.equal(second.name, '未命名-2');
+  assert.equal(workspace.stageHint(first), null);
+  assert.equal(workspace.isDirty(first), false);
+  workspace.setContent(first.id, 'unfinished');
+  assert.equal(workspace.isDirty(first), true);
+  assert.equal(second.content, '');
+  assert.equal(workspace.active.value.id, second.id);
 });
 
-test('previously discarded stages are prompted again if edited while another stage is pending', async () => {
-  const { app, stages } = createApp();
-  let executions = 0;
-  stages.ps.edit('first ps edit');
-  stages.vs.edit('first vs edit');
-  await app.runAfterSavePrompts(() => { executions += 1; }, ['ps', 'vs']);
-  await app.handleConfirmAction('discard');
-  assert.equal(app.currentSaveFile.value, 'shader.vs');
-  stages.ps.edit('newer ps edit');
-  await app.handleConfirmAction('discard');
-  assert.equal(executions, 0);
-  assert.equal(app.currentSaveFile.value, 'shader.ps');
-  await app.handleConfirmAction('cancel');
-  assert.equal(executions, 0);
-  assert.equal(app.pendingOperation.value, null);
+test('existing source files are clean and new files never replace them', () => {
+  const workspace = useEditorWorkspace();
+  const first = workspace.addSource({ path: 'C:/src/a.ps', content: 'saved' });
+  workspace.addSource();
+  assert.equal(workspace.isDirty(first), false);
+  assert.equal(workspace.state.documents.length, 2);
+  workspace.setContent(first.id, 'edited');
+  workspace.setContent(first.id, 'saved');
+  assert.equal(workspace.hasUnsavedChanges.value, false);
+});
+
+test('opening equivalent Windows paths activates the same buffer without replacing edits', () => {
+  const workspace = useEditorWorkspace();
+  const first = workspace.addSource({ path: 'C:/src/effect.vs', content: 'original' });
+  workspace.setContent(first.id, 'edited');
+  const reopened = workspace.addSource({ path: 'c:\\SRC\\EFFECT.VS', content: 'disk' });
+  assert.equal(reopened.id, first.id);
+  assert.equal(reopened.content, 'edited');
+  assert.equal(workspace.state.documents.length, 1);
+});
+
+test('same filenames in different locations remain independent and distinguishable', () => {
+  const workspace = useEditorWorkspace();
+  const a = workspace.addSource({ path: 'C:/one/effect.ps', content: 'one' });
+  const b = workspace.addSource({ path: 'C:/two/effect.ps', content: 'two' });
+  assert.notEqual(a.id, b.id);
+  assert.equal(workspace.tabDetail(a), 'one');
+  assert.equal(workspace.tabDetail(b), 'two');
+});
+
+test('KSH opens as two unsaved source tabs with hidden shared provenance', () => {
+  const workspace = useEditorWorkspace();
+  const result = fixture();
+  const [vs, ps] = workspace.addKsh('C:/input/effect.ksh', result);
+  assert.equal(vs.path, '');
+  assert.equal(ps.path, '');
+  assert.equal(workspace.dirtyDocuments.value.length, 2);
+  const exported = workspace.exportSnapshot(vs.id, ps.id);
+  assert.deepEqual(exported.metadata, result.metadata);
+  assert.equal(exported.rebuildMetadata, false);
+  result.metadata.uniforms[0].default_data[0] = 0;
+  exported.metadata.uniforms[0].default_data[1] = 0;
+  assert.deepEqual(workspace.exportSnapshot(vs.id, ps.id).metadata.uniforms[0].default_data, [0x80000000, 0x7fc01234, 0xffffffff]);
+});
+
+test('reopening KSH does not replace current buffers or duplicate its stages', () => {
+  const workspace = useEditorWorkspace();
+  const [vs, ps] = workspace.addKsh('C:/input/effect.ksh', fixture());
+  workspace.setContent(vs.id, 'unsaved');
+  workspace.addKsh('c:\\INPUT\\EFFECT.KSH', fixture());
+  assert.equal(workspace.state.documents.length, 2);
+  assert.equal(vs.content, 'unsaved');
+  assert.ok(workspace.exportSnapshot(vs.id, ps.id).metadata);
+});
+
+test('reopening a missing stage uses a fresh origin, avoiding stale metadata pairing', () => {
+  const workspace = useEditorWorkspace();
+  const [vs, ps] = workspace.addKsh('C:/input/effect.ksh', fixture());
+  workspace.remove([ps.id]);
+  const [, replacement] = workspace.addKsh('C:/input/effect.ksh', fixture());
+  const exported = workspace.exportSnapshot(vs.id, replacement.id);
+  assert.equal(exported.metadata, null);
+  assert.equal(exported.rebuildMetadata, true);
+});
+
+test('cross-KSH and mixed imported/plain pairs explicitly rebuild metadata', () => {
+  const workspace = useEditorWorkspace();
+  const [vs] = workspace.addKsh('C:/a.ksh', fixture());
+  const [, ps] = workspace.addKsh('C:/b.ksh', fixture());
+  const plain = workspace.addSource({ path: 'C:/plain.ps', content: 'pixel' });
+  for (const id of [ps.id, plain.id]) {
+    const result = workspace.exportSnapshot(vs.id, id);
+    assert.equal(result.metadata, null);
+    assert.equal(result.rebuildMetadata, true);
+  }
+});
+
+test('GLSL and unnamed tabs can be explicitly assigned either export stage', () => {
+  const workspace = useEditorWorkspace();
+  const a = workspace.addSource({ path: 'C:/generic.glsl', content: 'one' });
+  const b = workspace.addSource({ content: 'two' });
+  const vs = workspace.addSource({ path: 'C:/only.vs', content: 'three' });
+  assert.deepEqual(workspace.candidates('ps').map(document => document.id), [a.id, b.id]);
+  assert.equal(workspace.exportSnapshot(a.id, b.id).rebuildMetadata, false);
+  assert.throws(() => workspace.exportSnapshot(a.id, a.id));
+  assert.throws(() => workspace.exportSnapshot(a.id, vs.id));
+  assert.throws(() => workspace.exportSnapshot(a.id, -1));
+});
+
+test('saving a snapshot during edits updates its path without marking newer text saved', () => {
+  const workspace = useEditorWorkspace();
+  const document = workspace.addSource({ content: 'old' });
+  const snapshot = workspace.snapshot(document.id);
+  workspace.setContent(document.id, 'new');
+  workspace.markSaved(snapshot, 'C:/saved/new.ps');
+  assert.equal(document.name, 'new.ps');
+  assert.equal(document.content, 'new');
+  assert.equal(document.savedContent, 'old');
+  assert.equal(workspace.isDirty(document), true);
+  assert.equal(workspace.stageHint(document), 'ps');
+});
+
+test('saving imported sources preserves provenance and compatible defaults', () => {
+  const workspace = useEditorWorkspace();
+  const [vs, ps] = workspace.addKsh('C:/input/effect.ksh', fixture());
+  workspace.markSaved(workspace.snapshot(vs.id), 'C:/saved/renamed.vs');
+  assert.equal(workspace.isDirty(vs), false);
+  assert.equal(workspace.isDirty(ps), true);
+  assert.ok(workspace.exportSnapshot(vs.id, ps.id).metadata);
+});
+
+test('export history never clears source dirty state', () => {
+  const workspace = useEditorWorkspace();
+  const [vs, ps] = workspace.addKsh('C:/input.ksh', fixture());
+  workspace.state.lastExport = { vsId: vs.id, psId: ps.id, path: 'C:/out.ksh' };
+  assert.equal(workspace.hasUnsavedChanges.value, true);
+  assert.equal(workspace.dirtyDocuments.value.length, 2);
+});
+
+test('closed document snapshots cannot update another document', () => {
+  const workspace = useEditorWorkspace();
+  const document = workspace.addSource({ content: 'original' });
+  const snapshot = workspace.snapshot(document.id);
+  workspace.remove([document.id]);
+  const other = workspace.addSource({ content: 'new' });
+  assert.equal(workspace.markSaved(snapshot, 'C:/saved.ps'), false);
+  assert.equal(workspace.matches(snapshot), false);
+  assert.equal(other.path, '');
+});
+
+test('closing active/inactive tabs selects a remaining neighbour and empty closes cleanly', () => {
+  const workspace = useEditorWorkspace();
+  const a = workspace.addSource();
+  const b = workspace.addSource();
+  const c = workspace.addSource();
+  workspace.activate(b.id);
+  workspace.remove([a.id]);
+  assert.equal(workspace.state.activeId, b.id);
+  workspace.remove([b.id]);
+  assert.equal(workspace.state.activeId, c.id);
+  workspace.remove([c.id]);
+  assert.equal(workspace.state.primaryId, null);
+  assert.equal(workspace.state.activeId, null);
+});
+
+test('split editing follows focused pane without binding any shader pair', () => {
+  const workspace = useEditorWorkspace();
+  const a = workspace.addSource();
+  workspace.toggleSplit();
+  assert.equal(workspace.split.value, false);
+  const b = workspace.addSource();
+  const c = workspace.addSource();
+  workspace.activate(a.id);
+  workspace.toggleSplit();
+  assert.equal(workspace.state.primaryId, a.id);
+  assert.equal(workspace.state.secondaryId, b.id);
+  workspace.activate(b.id);
+  workspace.activate(c.id);
+  assert.equal(workspace.state.secondaryId, c.id);
+  assert.equal(workspace.state.primaryId, a.id);
+  workspace.remove([a.id]);
+  assert.equal(workspace.state.primaryId, c.id);
+  assert.equal(workspace.split.value, false);
+});
+
+test('tab cycling wraps and removing export members invalidates remembered selection', () => {
+  const workspace = useEditorWorkspace();
+  const a = workspace.addSource();
+  const b = workspace.addSource();
+  workspace.cycle(1);
+  assert.equal(workspace.state.activeId, a.id);
+  workspace.cycle(-1);
+  assert.equal(workspace.state.activeId, b.id);
+  workspace.state.lastExport = { vsId: a.id, psId: b.id, path: 'C:/out.ksh' };
+  workspace.remove([a.id]);
+  assert.equal(workspace.state.lastExport, null);
+});
+
+test('source paths support stage-free text and generated KSH names remain safe', () => {
+  assert.equal(extension('untitled'), '');
+  assert.equal(extension('shader.VS'), 'vs');
+  assert.equal(sourceFilePath('C:/untitled'), 'C:/untitled.glsl');
+  assert.equal(sourceFilePath('C:/notes.txt'), 'C:/notes.txt');
+  assert.throws(() => sourceFilePath('C:/effect.ksh'));
+  assert.equal(pathKey('C:\\ONE\\test.ps'), 'c:/one/test.ps');
+  for (const invalid of ['../escape', 'NUL', 'COM1', '', 'bad\0']) assert.throws(() => stageFileName(invalid, 'vs'));
 });

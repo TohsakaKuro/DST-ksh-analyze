@@ -599,9 +599,9 @@ fn rollback_replacements(entries: &mut [StagedReplacement]) -> Vec<String> {
     errors
 }
 
-fn commit_replacements(entries: &mut [StagedReplacement]) -> io::Result<()> {
+fn commit_replacements(entries: &mut [StagedReplacement], force: bool) -> io::Result<()> {
     for index in 0..entries.len() {
-        if entries[index].target.exists() {
+        if force && entries[index].target.exists() {
             let backup = loop {
                 let candidate = sidecar_path(&entries[index].target, "backup")?;
                 if !candidate.exists() {
@@ -628,7 +628,14 @@ fn commit_replacements(entries: &mut [StagedReplacement]) -> io::Result<()> {
     }
 
     for index in 0..entries.len() {
-        if let Err(error) = fs::rename(&entries[index].temp, &entries[index].target) {
+        // A hard link installs the complete temporary file without overwriting a target
+        // created after preflight. Both names are on the same filesystem.
+        let result = if force {
+            fs::rename(&entries[index].temp, &entries[index].target)
+        } else {
+            fs::hard_link(&entries[index].temp, &entries[index].target)
+        };
+        if let Err(error) = result {
             let rollback_errors = rollback_replacements(entries);
             let suffix = if rollback_errors.is_empty() {
                 String::new()
@@ -647,6 +654,14 @@ fn commit_replacements(entries: &mut [StagedReplacement]) -> io::Result<()> {
     }
 
     for entry in entries {
+        if !force {
+            if let Err(error) = fs::remove_file(&entry.temp) {
+                log::warn!(
+                    "新文件已写入，但无法删除临时文件 {}: {error}",
+                    entry.temp.display()
+                );
+            }
+        }
         if let Some(backup) = &entry.backup {
             if let Err(error) = fs::remove_file(backup) {
                 log::warn!("新文件已写入，但无法删除备份 {}: {error}", backup.display());
@@ -661,6 +676,7 @@ fn write_pair_atomically(
     first_bytes: &[u8],
     second_path: &Path,
     second_bytes: &[u8],
+    force: bool,
 ) -> io::Result<()> {
     validate_replacement_target(first_path)?;
     validate_replacement_target(second_path)?;
@@ -687,11 +703,80 @@ fn write_pair_atomically(
             installed: false,
         },
     ];
-    commit_replacements(&mut entries)
+    commit_replacements(&mut entries, force)
 }
 
 pub fn write_file_atomic(out_path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_bytes_atomically(out_path, bytes)
+}
+
+/// Save one source or a VS/PS pair after the caller validates stages and source text.
+pub fn write_source_files_atomic(sources: &[(&Path, &[u8])], force: bool) -> io::Result<()> {
+    if !(1..=2).contains(&sources.len()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "一次只能保存 1 或 2 个着色器源码文件",
+        ));
+    }
+
+    let mut resolved_paths = Vec::with_capacity(2);
+    for (path, _) in sources {
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "输出路径没有文件名"))?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let resolved_path = fs::canonicalize(parent)?.join(file_name);
+        let duplicate = resolved_paths.iter().any(|previous: &PathBuf| {
+            if cfg!(windows) {
+                previous.to_string_lossy().to_lowercase()
+                    == resolved_path.to_string_lossy().to_lowercase()
+            } else {
+                previous == &resolved_path
+            }
+        });
+        if duplicate {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "着色器输出路径不能重复",
+            ));
+        }
+        resolved_paths.push(resolved_path);
+
+        match fs::symlink_metadata(path) {
+            Ok(_) if !force => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("输出文件已存在: {}", path.display()),
+                ));
+            }
+            Ok(_) => validate_replacement_target(path)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    match sources {
+        [(path, bytes)] if force => write_file_atomic(path, bytes),
+        [(path, bytes)] => {
+            let temp = write_sibling_temp(path, bytes)?;
+            commit_replacements(
+                &mut [StagedReplacement {
+                    target: path.to_path_buf(),
+                    temp,
+                    backup: None,
+                    installed: false,
+                }],
+                false,
+            )
+        }
+        [(first_path, first_bytes), (second_path, second_bytes)] => {
+            write_pair_atomically(first_path, first_bytes, second_path, second_bytes, force)
+        }
+        _ => unreachable!("source count was checked above"),
+    }
 }
 
 /// Safely replace a KSH file with bytes that have already been built.
@@ -732,6 +817,7 @@ pub fn analyze_ksh_file(
         ksh.vertex.source.as_bytes(),
         &ps_file_path,
         ksh.pixel.source.as_bytes(),
+        force,
     )?;
 
     log::info!("分析完成");
@@ -1815,6 +1901,83 @@ mod codec_tests {
     }
 
     #[test]
+    fn source_writer_saves_single_or_pair_and_requires_force_to_replace() {
+        let directory = unique_test_dir("source-batch");
+        let vertex = directory.join("draft.vs");
+        let pixel = directory.join("draft.ps");
+        write_source_files_atomic(&[(&vertex, b"incomplete vertex (")], false).unwrap();
+        let pair: &[(&Path, &[u8])] = &[(&vertex, b"new vertex"), (&pixel, b"new pixel")];
+
+        let error = write_source_files_atomic(pair, false).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&vertex).unwrap(), b"incomplete vertex (");
+        assert!(!pixel.exists());
+
+        write_source_files_atomic(pair, true).unwrap();
+        assert_eq!(fs::read(&vertex).unwrap(), b"new vertex");
+        assert_eq!(fs::read(&pixel).unwrap(), b"new pixel");
+        write_source_files_atomic(&[(&pixel, b"single replacement")], true).unwrap();
+        assert_eq!(fs::read(&pixel).unwrap(), b"single replacement");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn source_writer_rejects_duplicate_paths_and_preflights_both_targets() {
+        let directory = unique_test_dir("source-preflight");
+        let vertex = directory.join("draft.vs");
+        let alias = directory.join(".").join("draft.vs");
+        let pixel = directory.join("draft.ps");
+        let error = write_source_files_atomic(&[(&vertex, b"first"), (&alias, b"second")], true)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+
+        fs::write(&pixel, b"old pixel").unwrap();
+        let error = write_source_files_atomic(&[(&vertex, b"first"), (&pixel, b"second")], false)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(!vertex.exists());
+        assert_eq!(fs::read(&pixel).unwrap(), b"old pixel");
+
+        let missing_pixel = directory.join("missing").join("draft.ps");
+        assert!(
+            write_pair_atomically(&pixel, b"replacement", &missing_pixel, b"draft", true).is_err()
+        );
+        assert_eq!(fs::read(&pixel).unwrap(), b"old pixel");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn non_forced_pair_rolls_back_without_overwriting_a_newly_created_target() {
+        let directory = unique_test_dir("source-no-clobber");
+        let vertex = directory.join("draft.vs");
+        let pixel = directory.join("draft.ps");
+        let mut entries = [
+            StagedReplacement {
+                target: vertex.clone(),
+                temp: write_sibling_temp(&vertex, b"new vertex").unwrap(),
+                backup: None,
+                installed: false,
+            },
+            StagedReplacement {
+                target: pixel.clone(),
+                temp: write_sibling_temp(&pixel, b"new pixel").unwrap(),
+                backup: None,
+                installed: false,
+            },
+        ];
+        fs::write(&pixel, b"created while save was pending").unwrap();
+
+        assert!(commit_replacements(&mut entries, false).is_err());
+        assert!(!vertex.exists());
+        assert_eq!(fs::read(&pixel).unwrap(), b"created while save was pending");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn paired_writer_rolls_back_both_files_when_second_commit_fails() {
         let directory = unique_test_dir("pair-rollback");
         let first_target = directory.join("pair.vs");
@@ -1840,7 +2003,7 @@ mod codec_tests {
             },
         ];
 
-        assert!(commit_replacements(&mut entries).is_err());
+        assert!(commit_replacements(&mut entries, true).is_err());
         assert_eq!(fs::read(&first_target).unwrap(), b"old vertex");
         assert_eq!(fs::read(&second_target).unwrap(), b"old pixel");
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
