@@ -23,12 +23,17 @@ export function useDocumentActions(workspace, io = desktop) {
     resolve?.(result);
   }
   function notify(text, intent = 'info') { notice.value = { text, intent }; }
-  async function run(label, action) {
+  async function run(label, action, errorTitle = null) {
     if (busy.value) return false;
     busy.value = label;
     notice.value = null;
     try { return await action(); }
-    catch (error) { notify(String(error.message || error), 'error'); return false; }
+    catch (error) {
+      const message = String(error.message || error);
+      if (errorTitle) await ask('error', { title: errorTitle, message });
+      else notify(message, 'error');
+      return false;
+    }
     finally { busy.value = ''; }
   }
   async function confirmOverwrite(path) {
@@ -37,8 +42,7 @@ export function useDocumentActions(workspace, io = desktop) {
   }
   function unchanged(snapshots) {
     if (snapshots.every(workspace.matches)) return true;
-    notify('操作期间文件已改变，本次操作已取消');
-    return false;
+    throw new Error('操作期间文件已改变，本次操作已取消，请重新导出');
   }
 
   async function saveInternal(id, saveAs = false) {
@@ -139,6 +143,9 @@ export function useDocumentActions(workspace, io = desktop) {
       if (!selected) return false;
       const snapshot = workspace.exportSnapshot(selected.vsId, selected.psId);
       if (snapshot.rebuildMetadata && !await ask('metadata')) return false;
+      unchanged([snapshot.vs, snapshot.ps]);
+      await io.checkKsh({ base_ksh: snapshot.metadata, vs_content: snapshot.vs.content, ps_content: snapshot.ps.content });
+      unchanged([snapshot.vs, snapshot.ps]);
       const defaultPath = previous?.vsId === selected.vsId && previous?.psId === selected.psId
         ? previous.path : `${fileName(snapshot.ps.name).replace(/\.[^.]+$/, '')}.ksh`;
       let path = await io.saveFileDialog({ title: '导出 KSH', defaultPath, filters: [{ name: 'KSH', extensions: ['ksh'] }] });
@@ -156,7 +163,7 @@ export function useDocumentActions(workspace, io = desktop) {
       workspace.state.lastExport = { ...selected, path };
       notify(`已导出 ${fileName(path)}`, 'success');
       return true;
-    });
+    }, '导出 KSH 失败');
   }
 
   return {

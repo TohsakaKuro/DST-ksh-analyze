@@ -14,7 +14,7 @@ async function answer(actions, kind, result) { await reach(() => actions.dialog.
 function harness(overrides = {}) {
   const workspace = useEditorWorkspace();
   const defaults = { openFileDialog: () => null, saveFileDialog: () => null, readFile: path => `source: ${path}`, analyzeKsh: ksh,
-    pathExists: () => false, saveEditorSource: () => {}, buildKsh: () => {} };
+    pathExists: () => false, saveEditorSource: () => {}, checkKsh: () => {}, buildKsh: () => {} };
   const calls = Object.fromEntries(Object.keys(defaults).map(name => [name, []]));
   const io = Object.fromEntries(Object.entries(defaults).map(([name, fallback]) => [name, async (...args) => {
     calls[name].push(structuredClone(args)); return await (overrides[name] || fallback)(...args);
@@ -260,6 +260,7 @@ test('export uses selected current buffers and output-derived names, never saves
   assert.equal(params.ps_name, 'glow.ps');
   assert.equal(params.ps_content, 'edited pixel');
   assert.deepEqual(params.base_ksh, ksh().metadata);
+  assert.deepEqual(calls.checkKsh[0][0], { base_ksh: ksh().metadata, vs_content: 'vertex', ps_content: 'edited pixel' });
   assert.equal(params.force, false);
   assert.equal(calls.saveEditorSource.length, 0);
   assert.equal(workspace.dirtyDocuments.value.length, 2);
@@ -319,6 +320,7 @@ test('export rejects stale selected contents but ignores unrelated file edits', 
     await reach(() => calls.saveFileDialog.length === 1);
     workspace.setContent(related ? ps.id : other.id, 'later edit');
     picker.resolve('C:/out.ksh');
+    if (related) await answer(actions, 'error', true);
     assert.equal(await exporting, !related);
     assert.equal(calls.buildKsh.length, related ? 0 : 1);
   }
@@ -331,10 +333,57 @@ test('export overwrite propagates explicit force and failures do not save source
   const exporting = actions.exportKsh();
   await answer(actions, 'export', { vsId: vs.id, psId: ps.id });
   await answer(actions, 'overwrite', true);
+  await reach(() => actions.dialog.value?.kind === 'error');
+  assert.equal(actions.dialog.value.message, 'build failed');
+  assert.equal(actions.notice.value, null);
+  actions.finishDialog(true);
   assert.equal(await exporting, false);
   assert.equal(calls.buildKsh[0][0].force, true);
   assert.equal(workspace.state.lastExport, null);
   assert.equal(calls.saveEditorSource.length, 0);
+});
+
+test('preflight must finish before opening the output picker', async () => {
+  const check = deferred();
+  const { workspace, actions, calls } = harness({ checkKsh: () => check.promise });
+  const [vs, ps] = pair(workspace);
+  const exporting = actions.exportKsh();
+  await answer(actions, 'export', { vsId: vs.id, psId: ps.id });
+  await reach(() => calls.checkKsh.length === 1);
+  assert.equal(calls.saveFileDialog.length, 0);
+  check.resolve();
+  assert.equal(await exporting, false);
+  assert.equal(calls.saveFileDialog.length, 1);
+});
+
+test('preflight failure shows a modal without opening the output picker or writing', async () => {
+  const { workspace, actions, calls } = harness({ checkKsh: () => { throw new Error('uniform conflict'); } });
+  const [vs, ps] = pair(workspace);
+  const exporting = actions.exportKsh();
+  await answer(actions, 'export', { vsId: vs.id, psId: ps.id });
+  await reach(() => actions.dialog.value?.kind === 'error');
+  assert.equal(actions.dialog.value.message, 'uniform conflict');
+  assert.equal(actions.notice.value, null);
+  assert.equal(calls.saveFileDialog.length, 0);
+  assert.equal(calls.buildKsh.length, 0);
+  actions.finishDialog(true);
+  assert.equal(await exporting, false);
+  assert.equal(actions.busy.value, '');
+});
+
+test('edits during preflight cancel export before the output picker', async () => {
+  const check = deferred();
+  const { workspace, actions, calls } = harness({ checkKsh: () => check.promise });
+  const [vs, ps] = pair(workspace);
+  const exporting = actions.exportKsh();
+  await answer(actions, 'export', { vsId: vs.id, psId: ps.id });
+  await reach(() => calls.checkKsh.length === 1);
+  workspace.setContent(ps.id, 'later edit');
+  check.resolve();
+  await answer(actions, 'error', true);
+  assert.equal(await exporting, false);
+  assert.equal(calls.saveFileDialog.length, 0);
+  assert.equal(calls.buildKsh.length, 0);
 });
 
 test('busy gate blocks overlapping new/open/save/close operations', async () => {

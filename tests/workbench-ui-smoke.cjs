@@ -35,6 +35,10 @@ function mockDesktop() {
       if (command === 'analyze_ksh') return structuredClone(result);
       if (command === 'plugin:fs|exists') return false;
       if (command === 'plugin:fs|read_text_file') return Array.from(new TextEncoder().encode(args.path.endsWith('.vs') ? vs : ps));
+      if (command === 'check_ksh') {
+        if (test.checkError) throw new Error(test.checkError);
+        return;
+      }
       if (command === 'save_editor_source' || command === 'build_ksh') return;
       if (command === 'plugin:window|is_maximized') return test.maximized;
       if (command === 'plugin:window|minimize' || command === 'plugin:window|start_dragging') return;
@@ -174,6 +178,20 @@ function mockDesktop() {
     assert.equal(await tab('base.vs').locator('.modified-dot').count(), 1);
     await dismissNotice();
 
+    const pickersBeforeCheck = (await nativeCalls('plugin:dialog|save')).length;
+    await page.evaluate(() => { window.__workbenchTest.checkError = 'VS / PS uniform SHARED 类型不一致\nVS: float\nPS: vec2'; });
+    await exportButton.click();
+    await choosePair('base.vs', 'glow.ps');
+    await action('导出').click();
+    await dialog('导出 KSH 失败').waitFor();
+    assert.ok((await page.locator('fluent-dialog .export-error').textContent()).includes('SHARED'));
+    assert.equal((await nativeCalls('plugin:dialog|save')).length, pickersBeforeCheck);
+    assert.equal((await nativeCalls('build_ksh')).length, 0);
+    assert.equal(await page.locator('.operation-notice').count(), 0, 'export errors belong in a modal, not the editor notice');
+    await capture('workspace-export-error');
+    await action('确定').click();
+    await page.evaluate(() => { window.__workbenchTest.checkError = null; });
+
     await exportButton.click();
     await dialog('导出 KSH').waitFor();
     assert.equal(await action('导出').evaluate(element => element.disabled), true, 'multiple pixel files require explicit selection');
@@ -184,6 +202,8 @@ function mockDesktop() {
     await action('导出').click();
     await page.locator('.operation-notice').getByText('已导出 glow.ksh').waitFor();
     const exported = (await nativeCalls('build_ksh')).at(-1).args.params;
+    const exportCommands = await page.evaluate(() => window.__workbenchTest.calls.map(call => call.command));
+    assert.ok(exportCommands.lastIndexOf('check_ksh') < exportCommands.lastIndexOf('plugin:dialog|save'), 'preflight precedes the output picker');
     assert.equal(exported.name_from_output, true);
     assert.equal(exported.vs_name, 'glow.vs');
     assert.equal(exported.ps_name, 'glow.ps');

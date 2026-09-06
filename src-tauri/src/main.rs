@@ -54,6 +54,13 @@ struct BuildKshParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct CheckKshParams {
+    base_ksh: Option<KshFile>,
+    vs_content: String,
+    ps_content: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ShaderSourceParams {
     stage: String,
     path: String,
@@ -135,6 +142,27 @@ fn analyze_ksh_metadata(ksh: KshFile) -> Result<AnalyzeKshResult, String> {
             uniform_indices: ksh.pixel.uniform_indices,
         },
     })
+}
+
+#[tauri::command]
+async fn check_ksh(params: CheckKshParams) -> Result<(), String> {
+    check_ksh_impl(params)
+}
+
+fn check_ksh_impl(params: CheckKshParams) -> Result<(), String> {
+    // Run the real builder in memory; the output name is not chosen yet.
+    build_ksh_bytes(&BuildKshParams {
+        output_path: "preflight.ksh".to_owned(),
+        name_from_output: true,
+        force: None,
+        base_ksh: params.base_ksh,
+        base_ksh_path: None,
+        vs_name: "preflight.vs".to_owned(),
+        vs_content: params.vs_content,
+        ps_name: "preflight.ps".to_owned(),
+        ps_content: params.ps_content,
+    })
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -341,6 +369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(tauri::generate_handler![
             analyze_ksh,
             build_ksh,
+            check_ksh,
             write_shader_source,
             save_shader_sources,
             save_editor_source
@@ -430,6 +459,47 @@ mod tests {
             core::encode_ksh(&original).unwrap()
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn preflight_uses_the_builder_for_fresh_and_imported_sources() {
+        for base in [None, Some(sample_metadata())] {
+            let vertex = "uniform float SHARED; void main() { gl_Position = vec4(SHARED); }";
+            let pixel =
+                "uniform vec2 SHARED; void main() { gl_FragColor = vec4(SHARED, 0.0, 1.0); }";
+            let error = check_ksh_impl(CheckKshParams {
+                base_ksh: base.clone(),
+                vs_content: vertex.to_owned(),
+                ps_content: pixel.to_owned(),
+            })
+            .unwrap_err();
+            let build_error = build_ksh_bytes(&BuildKshParams {
+                output_path: "chosen.ksh".to_owned(),
+                name_from_output: true,
+                force: None,
+                base_ksh: base,
+                base_ksh_path: None,
+                vs_name: "chosen.vs".to_owned(),
+                vs_content: vertex.to_owned(),
+                ps_name: "chosen.ps".to_owned(),
+                ps_content: pixel.to_owned(),
+            })
+            .unwrap_err();
+            assert_eq!(error, build_error);
+        }
+        let original = sample_metadata();
+        check_ksh_impl(CheckKshParams {
+            base_ksh: Some(original.clone()),
+            vs_content: original.vertex.source,
+            ps_content: original.pixel.source,
+        })
+        .unwrap();
+        check_ksh_impl(CheckKshParams {
+            base_ksh: None,
+            vs_content: "void main() {}".to_owned(),
+            ps_content: "void main() {}".to_owned(),
+        })
+        .unwrap();
     }
 
     #[test]

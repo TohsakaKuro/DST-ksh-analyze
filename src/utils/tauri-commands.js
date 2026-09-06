@@ -33,6 +33,11 @@ export async function buildKsh(params) {
   return await invoke('build_ksh', { params });
 }
 
+export async function checkKsh(params) {
+  requireDesktop();
+  return invoke('check_ksh', { params });
+}
+
 /**
  * 打开文件对话框
  * @param {Object} options - 对话框选项

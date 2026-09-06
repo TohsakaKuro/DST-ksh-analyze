@@ -14,7 +14,7 @@ function initial(stage) {
 const selected = reactive({ vs: initial('vs'), ps: initial('ps') });
 if (selected.ps === selected.vs) selected.ps = null;
 const valid = computed(() => selected.vs != null && selected.ps != null && selected.vs !== selected.ps);
-const title = computed(() => ({ export: '导出 KSH', unsaved: '保存更改？', overwrite: '替换现有文件？', metadata: '重新组合源码？' })[props.model.kind]);
+const title = computed(() => props.model.title || ({ export: '导出 KSH', unsaved: '保存更改？', overwrite: '替换现有文件？', metadata: '重新组合源码？' })[props.model.kind]);
 function submit() { if (valid.value) emit('resolve', { vsId: selected.vs, psId: selected.ps }); }
 </script>
 
@@ -36,6 +36,7 @@ function submit() { if (valid.value) emit('resolve', { vsId: selected.vs, psId: 
     </form>
     <ul v-else-if="model.kind === 'unsaved'" class="file-list"><li v-for="name in model.names" :key="name">{{ name }}</li></ul>
     <ul v-else-if="model.kind === 'overwrite'" class="file-list"><li v-for="path in model.paths" :key="path">{{ path }}</li></ul>
+    <p v-else-if="model.kind === 'error'" class="export-error">{{ model.message }}</p>
     <p v-else class="metadata-warning">所选源码不是同一 KSH 的原始 VS/PS 组合。导出将根据当前源码重建参数表，不沿用原 KSH 的默认值和额外元数据。</p>
     <template #actions>
       <template v-if="model.kind === 'unsaved'">
@@ -44,8 +45,9 @@ function submit() { if (valid.value) emit('resolve', { vsId: selected.vs, psId: 
       </template>
       <fluent-button v-else-if="model.kind === 'overwrite'" appearance="primary" @click="emit('resolve', true)">替换</fluent-button>
       <fluent-button v-else-if="model.kind === 'metadata'" appearance="primary" @click="emit('resolve', true)">继续</fluent-button>
+      <fluent-button v-else-if="model.kind === 'error'" appearance="primary" autofocus @click="emit('resolve', true)">确定</fluent-button>
       <fluent-button v-else appearance="primary" :disabled.prop="!valid" @click="submit">导出…</fluent-button>
-      <fluent-button @click="emit('resolve', null)">取消</fluent-button>
+      <fluent-button v-if="model.kind !== 'error'" @click="emit('resolve', null)">取消</fluent-button>
     </template>
   </AppDialog>
 </template>
