@@ -15,6 +15,7 @@
         "title": "饥荒着色器文件解析器",
         "width": 1000,
         "height": 700,
+        "decorations": false,
         "backgroundColor": "#1e1e1e",
         "visible": true,
         "theme": "Dark"

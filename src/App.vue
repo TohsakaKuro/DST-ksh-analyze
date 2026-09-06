@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { FilePlus2, FolderOpen, Save, SaveAll, PackageOpen, Undo2, Redo2, Search, Columns2, X, CircleAlert, CircleCheck, Info, FileCode2 } from '@lucide/vue';
+import { FilePlus2, FolderOpen, Save, SaveAll, PackageOpen, Undo2, Redo2, Search, Columns2, X, CircleAlert, CircleCheck, Info, FileCode2, Minus, Square, Copy } from '@lucide/vue';
 import CodeEditor from './components/CodeEditor.vue';
 import ToolButton from './components/ToolButton.vue';
 import DocumentDialog from './components/DocumentDialog.vue';
@@ -16,13 +16,36 @@ const { state, active, dirtyDocuments, hasUnsavedChanges, split } = workspace;
 const actions = useDocumentActions(workspace);
 const { busy, notice, dialog } = actions;
 const showAbout = ref(false);
+const desktop = isTauri();
+const appWindow = desktop ? getCurrentWindow() : null;
+const maximized = ref(false);
 const positions = reactive({});
 const cursor = computed(() => positions[state.activeId] || { line: 1, column: 1 });
 const editors = {};
 let unlistenClose;
+let unlistenResize;
 let closeApproved = false;
 let unmounted = false;
 const visible = id => id === state.primaryId || id === state.secondaryId;
+
+async function syncWindowState() {
+  try {
+    const value = await appWindow.isMaximized();
+    if (!unmounted) maximized.value = value;
+  } catch (error) { if (!unmounted) actions.notify(String(error.message || error), 'error'); }
+}
+async function windowAction(action) {
+  if (!appWindow) return;
+  try {
+    await appWindow[action]();
+    if (action === 'toggleMaximize') await syncWindowState();
+  } catch (error) { actions.notify(String(error.message || error), 'error'); }
+}
+function dragTitlebar(event) {
+  if (event.button !== 0 || !(event.target === event.currentTarget || event.target.matches('.header-spacer, .app-icon'))) return;
+  event.preventDefault();
+  windowAction(event.detail === 2 ? 'toggleMaximize' : 'startDragging');
+}
 
 async function activate(id) {
   workspace.activate(id);
@@ -68,9 +91,8 @@ watch(() => state.documents.map(document => document.id), ids => {
 onMounted(async () => {
   window.addEventListener('keydown', handleKeys);
   window.addEventListener('beforeunload', beforeUnload);
-  if (!isTauri()) return;
+  if (!desktop) return;
   try {
-    const appWindow = getCurrentWindow();
     const stopListening = await appWindow.onCloseRequested(async event => {
       if (closeApproved) return;
       event.preventDefault();
@@ -79,6 +101,9 @@ onMounted(async () => {
       } catch (error) { closeApproved = false; actions.notify(String(error.message || error), 'error'); }
     });
     if (unmounted) stopListening(); else unlistenClose = stopListening;
+    const stopResize = await appWindow.onResized(syncWindowState);
+    if (unmounted) stopResize(); else unlistenResize = stopResize;
+    await syncWindowState();
   } catch (error) { actions.notify(String(error.message || error), 'error'); }
 });
 onBeforeUnmount(() => {
@@ -86,12 +111,13 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeys);
   window.removeEventListener('beforeunload', beforeUnload);
   unlistenClose?.();
+  unlistenResize?.();
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="app-header">
+    <header class="app-header" :class="{ 'desktop-titlebar': desktop }" @mousedown="dragTitlebar">
       <img class="app-icon" :src="appIcon" alt="DST KSH Analyze" width="22" height="22" />
       <nav class="app-menu" aria-label="主菜单">
         <fluent-menu>
@@ -135,6 +161,11 @@ onBeforeUnmount(() => {
         <ToolButton :icon="Columns2" label="并排编辑" :selected="split" :disabled="state.documents.length < 2" @click="workspace.toggleSplit()" />
         <ToolButton :icon="Info" label="关于" @click="showAbout = true" />
       </div>
+      <div v-if="desktop" class="window-controls" role="group" aria-label="窗口控制">
+        <button type="button" class="window-control" title="最小化" aria-label="最小化" @click="windowAction('minimize')"><Minus aria-hidden="true" /></button>
+        <button type="button" class="window-control" :title="maximized ? '还原' : '最大化'" :aria-label="maximized ? '还原' : '最大化'" @click="windowAction('toggleMaximize')"><component :is="maximized ? Copy : Square" aria-hidden="true" /></button>
+        <button type="button" class="window-control window-close" title="关闭窗口" aria-label="关闭窗口" @click="windowAction('close')"><X aria-hidden="true" /></button>
+      </div>
     </header>
     <main class="editor-workspace" :data-layout="split ? 'split' : 'single'" aria-label="源码编辑器">
       <div v-if="state.documents.length" class="file-tabs" role="tablist" aria-label="已打开文件">
@@ -159,7 +190,6 @@ onBeforeUnmount(() => {
         </section>
       </div>
       <div v-else class="empty-workspace">
-        <img :src="appIcon" alt="" width="72" height="72" />
         <div class="empty-actions"><fluent-button appearance="subtle" @click="actions.newFile()"><FilePlus2 slot="start" />新建文件</fluent-button><fluent-button appearance="subtle" @click="actions.openFiles()"><FolderOpen slot="start" />打开文件…</fluent-button></div>
       </div>
     </main>

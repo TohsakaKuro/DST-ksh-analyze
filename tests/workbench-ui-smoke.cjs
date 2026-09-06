@@ -19,7 +19,7 @@ function mockDesktop() {
       vertex: { source_name: 'effect.vs', source: vs, uniform_indices: [0] },
       pixel: { source_name: 'effect.ps', source: ps, uniform_indices: [] } } };
   window.isTauri = true;
-  window.__workbenchTest = { calls: [], openPaths: [], savePaths: [], closeFails: false,
+  window.__workbenchTest = { calls: [], openPaths: [], savePaths: [], closeFails: false, maximized: false,
     requestClose() { return callbacks.get(listeners.get('tauri://close-requested'))({ event: 'tauri://close-requested', id: 1, payload: null }); } };
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: 'main' } },
@@ -36,7 +36,14 @@ function mockDesktop() {
       if (command === 'plugin:fs|exists') return false;
       if (command === 'plugin:fs|read_text_file') return Array.from(new TextEncoder().encode(args.path.endsWith('.vs') ? vs : ps));
       if (command === 'save_editor_source' || command === 'build_ksh') return;
-      if (command === 'plugin:window|close') { if (test.closeFails) throw new Error('Simulated close failure'); return; }
+      if (command === 'plugin:window|is_maximized') return test.maximized;
+      if (command === 'plugin:window|minimize' || command === 'plugin:window|start_dragging') return;
+      if (command === 'plugin:window|toggle_maximize') { test.maximized = !test.maximized; return; }
+      if (command === 'plugin:window|close') {
+        if (test.closeFails) throw new Error('Simulated close failure');
+        queueMicrotask(() => { void test.requestClose(); });
+        return;
+      }
       if (command === 'plugin:window|destroy') return;
       throw new Error('Unexpected native command: ' + command);
     },
@@ -91,8 +98,21 @@ function mockDesktop() {
     assert.equal(await page.locator('.monaco-editor').count(), 0);
     assert.equal(await exportButton.evaluate(element => element.disabled), true);
     await capture('workspace-empty');
+    assert.equal(await page.locator('img').count(), 1, 'one application icon in the main window');
+    await page.getByRole('button', { name: '最小化', exact: true }).click();
+    assert.equal((await nativeCalls('plugin:window|minimize')).length, 1);
+    await page.getByRole('button', { name: '最大化', exact: true }).click();
+    await page.getByRole('button', { name: '还原', exact: true }).waitFor();
+    await page.getByRole('button', { name: '还原', exact: true }).click();
+    await page.getByRole('button', { name: '最大化', exact: true }).waitFor();
+    await page.locator('.header-spacer').dispatchEvent('mousedown', { button: 0, detail: 1 });
+    assert.equal((await nativeCalls('plugin:window|start_dragging')).length, 1);
+    await page.locator('.header-spacer').dispatchEvent('mousedown', { button: 0, detail: 2 });
+    await page.getByRole('button', { name: '还原', exact: true }).waitFor();
+    await page.getByRole('button', { name: '还原', exact: true }).click();
 
     await page.locator('fluent-menu-button').filter({ hasText: '文件' }).click();
+    assert.equal((await nativeCalls('plugin:window|start_dragging')).length, 1, 'menu clicks must not drag the window');
     const newMenuItem = page.locator('fluent-menu-item').filter({ hasText: '新建文件' });
     const disabledSave = page.locator('fluent-menu-item').filter({ hasText: /^保存/ });
     const menuStyle = element => ({ background: getComputedStyle(element).backgroundColor, color: getComputedStyle(element).color, cursor: getComputedStyle(element).cursor });
@@ -133,7 +153,7 @@ function mockDesktop() {
     await tab('glow.ps').click();
     await waitText('glow.ps', 'gl_FragColor');
     await dismissNotice();
-    assert.equal((await editor('glow.ps').boundingBox()).y, 80);
+    assert.equal((await editor('glow.ps').boundingBox()).y, 78, '40px titlebar plus 38px tabs');
     assert.equal(await page.locator('.document-heading, .stage-heading').count(), 0);
     await capture('workspace-desktop');
 
@@ -250,6 +270,10 @@ function mockDesktop() {
     await page.locator('.empty-workspace').waitFor();
     await tool('新建文件').click();
     await append('未命名-2', '// protect');
+    await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
+    await dialog('保存更改？').waitFor();
+    await action('取消').click();
+    assert.equal(await tab('未命名-2').count(), 1, 'titlebar close preserves unsaved content when canceled');
     await page.evaluate(() => { window.__workbenchTest.closeFails = true; void window.__workbenchTest.requestClose(); });
     await dialog('保存更改？').waitFor();
     await action('不保存').click();
