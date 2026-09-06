@@ -39,6 +39,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
+import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 const props = defineProps({
@@ -50,9 +51,9 @@ const props = defineProps({
 
 defineEmits(['close']);
 
-const version = ref('');
-const repository = ref('');
-const issues = ref('');
+const version = ref('未知');
+const repository = 'https://github.com/TohsakaKuro/DST-ksh-analyze';
+const issues = 'https://github.com/TohsakaKuro/DST-ksh-analyze/issues';
 
 const openExternal = async (url) => {
   //return
@@ -65,16 +66,9 @@ const openExternal = async (url) => {
 
 onMounted(async () => {
   try {
-    const response = await fetch('/package.json');
-    const data = await response.json();
-    version.value = data.version;
-    repository.value = data.repository?.url || 'https://github.com/TohsakaKuro/DST-ksh-analyze';
-    issues.value = data.bugs?.url || 'https://github.com/TohsakaKuro/DST-ksh-analyze/issues';
-  } catch (error) {
-    console.error('无法读取版本信息:', error);
+    version.value = await getVersion();
+  } catch {
     version.value = '未知';
-    repository.value = 'https://github.com/TohsakaKuro/DST-ksh-analyze';
-    issues.value = 'https://github.com/TohsakaKuro/DST-ksh-analyze/issues';
   }
 });
 </script>
@@ -212,4 +206,4 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
 }
-</style> 
+</style>

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { readTextFile } from '@tauri-apps/plugin-fs';
 
 /**
  * 分析 KSH 文件
@@ -15,6 +15,7 @@ export async function analyzeKsh(filePath) {
  * 构建 KSH 文件
  * @param {Object} params - 构建参数
  * @param {string} params.output_path - 输出 KSH 文件路径
+ * @param {string|null} params.base_ksh_path - 可选的原始 KSH，用于保留可兼容元数据
  * @param {string} params.vs_name - 顶点着色器名称
  * @param {string} params.vs_content - 顶点着色器内容
  * @param {string} params.ps_name - 像素着色器名称
@@ -22,7 +23,6 @@ export async function analyzeKsh(filePath) {
  * @returns {Promise<void>}
  */
 export async function buildKsh(params) {
-  console.log('buildKsh', params);
   return await invoke('build_ksh', { params });
 }
 
@@ -70,8 +70,9 @@ export async function readFile(filePath) {
  * 写入文本文件
  * @param {string} filePath - 文件路径
  * @param {string} content - 文件内容
+ * @param {'vs'|'ps'} stage - 内容所属的着色器阶段
  * @returns {Promise<void>}
  */
-export async function writeFile(filePath, content) {
-  return await writeTextFile(filePath, content);
-} 
+export async function writeFile(filePath, content, stage) {
+  return await invoke('write_shader_source', { filePath, content, stage });
+}

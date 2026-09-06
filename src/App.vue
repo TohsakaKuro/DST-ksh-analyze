@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted, watch, nextTick, shallowRef, onUnmounted } from "vue";
+import { ref, onMounted, nextTick, shallowRef, onUnmounted } from "vue";
 import * as monaco from 'monaco-editor';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution';
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution';
@@ -55,10 +56,23 @@ const currentSaveFile = ref(null);
 
 // 添加待执行操作状态
 const pendingOperation = ref(null);
+let pendingOperationStages = [];
+const discardedStageStates = new Map();
 
 // 添加保存点状态
 const psSavePoint = ref('');
 const vsSavePoint = ref('');
+const psNameSavePoint = ref('shader');
+const vsNameSavePoint = ref('shader');
+const baseKshPath = ref('');
+const stageLoadGeneration = { ps: 0, vs: 0 };
+const stageSaveGeneration = { ps: 0, vs: 0 };
+const stageSaveTail = { ps: Promise.resolve(), vs: Promise.resolve() };
+let kshSaveGeneration = 0;
+let kshSaveTail = Promise.resolve();
+const appWindow = getCurrentWindow();
+let unlistenCloseRequested = null;
+let closeApproved = false;
 
 // 初始化编辑器
 const initEditor = (container, content) => {
@@ -100,10 +114,6 @@ const initEditor = (container, content) => {
     toggleComment();
   });
 
-  window.addEventListener('resize', () => {
-    editor.layout();
-  });
-
   return editor;
 };
 
@@ -123,9 +133,10 @@ const switchTab = (tab) => {
 };
 
 // 修改开始编辑函数
-const startEditing = (event) => {
+const startEditing = (event, stage = activeTab.value) => {
   // 阻止事件冒泡，防止触发标签切换
   event?.stopPropagation();
+  activeTab.value = stage;
   editingFileName.value = true;
   // 在下一个 tick 聚焦输入框
   nextTick(() => {
@@ -136,74 +147,98 @@ const startEditing = (event) => {
 
 // 修改结束编辑函数
 const finishEditing = () => {
+  const stage = activeTab.value;
+  if (stage === 'ps') {
+    psName.value = processFileName(psName.value) || 'untitled';
+  } else {
+    vsName.value = processFileName(vsName.value) || 'untitled';
+  }
   editingFileName.value = false;
+  refreshModified(stage);
 };
 
-// 修改保存函数
-async function handleSave() {
-  const isPs = activeTab.value === 'ps';
+// 保存指定阶段，避免确认另一个标签页时误存当前活动标签页。
+async function handleSave(stage = activeTab.value) {
+  const isPs = stage === 'ps';
   const currentPath = isPs ? currentPsPath.value : currentVsPath.value;
   
-  if (!currentPath) {
-    return handleSaveAs();
+  if (!currentPath || processFileName(currentPath) !== processFileName(isPs ? psName.value : vsName.value)) {
+    return handleSaveAs(stage);
   }
   
   try {
     const content = (isPs ? psEditor.value : vsEditor.value)?.getValue() || '';
-    await writeFile(currentPath, content);
+    const saveGeneration = beginStageSave(stage);
+    await serializeStageSave(stage, () => writeFile(currentPath, content, stage));
+    if (!stageSaveIsCurrent(stage, saveGeneration)) return true;
+
     if (isPs) {
-      psModified.value = false;
-      psSavePoint.value = content; // 记录保存点
+      psSavePoint.value = content;
+      psNameSavePoint.value = processFileName(currentPath);
     } else {
-      vsModified.value = false;
-      vsSavePoint.value = content; // 记录保存点
+      vsSavePoint.value = content;
+      vsNameSavePoint.value = processFileName(currentPath);
     }
+    refreshModified(stage);
+    return true;
   } catch (error) {
     showError.value = true;
     errorMessage.value = `保存文件失败: ${error}`;
+    return false;
   }
 }
 
 // 修改另存为函数
-async function handleSaveAs() {
-  const isPs = activeTab.value === 'ps';
+async function handleSaveAs(stage = activeTab.value) {
+  const isPs = stage === 'ps';
   const currentPath = isPs ? currentPsPath.value : currentVsPath.value;
-  const fileName = isPs ? psName.value : vsName.value;
   const extension = isPs ? 'ps' : 'vs';
+  const fileName = shaderFileName(stage);
   
   try {
     const filePath = await saveFileDialog({
       title: `保存 ${extension.toUpperCase()} 文件`,
-      defaultPath: currentPath || `${fileName}.${extension}`,
+      defaultPath: currentPath || fileName,
       filters: [{
         name: extension.toUpperCase(),
         extensions: [extension]
       }]
     });
     
-    if (!filePath) return;
+    if (!filePath) return false;
     
+    const outputPath = prepareSavePath(filePath, extension);
     const content = (isPs ? psEditor.value : vsEditor.value)?.getValue() || '';
-    await writeFile(filePath, content);
+    const nameBeforeWrite = processFileName(isPs ? psName.value : vsName.value);
+    const saveGeneration = beginStageSave(stage);
+    await serializeStageSave(stage, () => writeFile(outputPath, content, stage));
+    if (!stageSaveIsCurrent(stage, saveGeneration)) return true;
+
+    const savedName = processFileName(outputPath);
     
     if (isPs) {
-      currentPsPath.value = filePath;
-      psName.value = processFileName(filePath);
-      psModified.value = false;
+      currentPsPath.value = outputPath;
+      if (processFileName(psName.value) === nameBeforeWrite) psName.value = savedName;
+      psSavePoint.value = content;
+      psNameSavePoint.value = savedName;
     } else {
-      currentVsPath.value = filePath;
-      vsName.value = processFileName(filePath);
-      vsModified.value = false;
+      currentVsPath.value = outputPath;
+      if (processFileName(vsName.value) === nameBeforeWrite) vsName.value = savedName;
+      vsSavePoint.value = content;
+      vsNameSavePoint.value = savedName;
     }
+    refreshModified(stage);
+    return true;
   } catch (error) {
     showError.value = true;
     errorMessage.value = `保存文件失败: ${error}`;
+    return false;
   }
 }
 
 // 处理双击事件
-const handleDoubleClick = (event) => {
-  startEditing(event);
+const handleDoubleClick = (event, stage) => {
+  startEditing(event, stage);
 };
 
 // 修改编辑器内容变化监听
@@ -211,12 +246,7 @@ const setupEditorChangeListener = (editor, isPs) => {
   if (!editor) return;
   
   editor.onDidChangeModelContent(() => {
-    const content = editor.getValue();
-    if (isPs) {
-      psModified.value = content !== psSavePoint.value;
-    } else {
-      vsModified.value = content !== vsSavePoint.value;
-    }
+    refreshModified(isPs ? 'ps' : 'vs');
   });
 };
 
@@ -229,7 +259,7 @@ const initGlslLanguage = () => {
         [/\/\*/, 'comment', '@comment'],
         [/\/\/.*$/, 'comment'],
         [/#\w+/, 'preprocessor'],
-        [/\b(attribute|const|uniform|varying|buffer|shared|coherent|volatile|restrict|readonly|writeonly|atomic_uint|break|continue|do|for|while|if|else|in|out|inout|float|int|void|bool|true|false|invariant|precise|discard|return|mat2|mat3|mat4|vec2|vec3|vec4|ivec2|ivec3|ivec4|bvec2|bvec3|bvec4|uvec2|uvec3|uvec4|lowp|mediump|highp|precision|sampler2D|sampler3D|samplerCube|struct)\b/, 'keyword'],
+        [/\b(attribute|const|uniform|varying|buffer|shared|coherent|volatile|restrict|readonly|writeonly|atomic_uint|break|continue|do|for|while|if|else|in|out|inout|float|int|void|bool|true|false|invariant|precise|discard|return|mat2|mat2x2|mat2x3|mat2x4|mat3|mat3x2|mat3x3|mat3x4|mat4|mat4x2|mat4x3|mat4x4|vec2|vec3|vec4|ivec2|ivec3|ivec4|bvec2|bvec3|bvec4|uvec2|uvec3|uvec4|lowp|mediump|highp|precision|sampler1D|sampler2D|sampler3D|samplerCube|struct)\b/, 'keyword'],
         [/[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+/, 'number'],
         [/[=<>!]=|[+\-*/%]|\+\+|--|\|\||&&|[<>]/, 'operator'],
         [/[a-zA-Z_]\w*/, {
@@ -256,6 +286,16 @@ const toggleSearch = () => {
 const toggleReplace = () => {
   const editor = activeTab.value === 'ps' ? psEditor.value : vsEditor.value;
   editor?.trigger('', 'editor.action.startFindReplaceAction');
+};
+
+const undo = () => {
+  const editor = activeTab.value === 'ps' ? psEditor.value : vsEditor.value;
+  editor?.trigger('toolbar', 'undo', null);
+};
+
+const redo = () => {
+  const editor = activeTab.value === 'ps' ? psEditor.value : vsEditor.value;
+  editor?.trigger('toolbar', 'redo', null);
 };
 
 const toggleComment = () => {
@@ -317,6 +357,8 @@ const toggleComment = () => {
 
 // 修改处理快捷键函数
 const handleKeyDown = (event) => {
+  if (showConfirm.value) return;
+
   // 检查是否按下 Ctrl 键
   if (event.ctrlKey) {
     switch (event.key.toLowerCase()) {
@@ -343,9 +385,137 @@ const handleKeyDown = (event) => {
 // 修改文件名处理函数
 function processFileName(name) {
   // 处理 Windows 和 Unix 风格的路径
-  const fileName = name.split(/[/\\]/).pop();
-  // 移除扩展名
-  return fileName.replace(/\.(ps|vs)$/i, '');
+  const fileName = String(name || '').split(/[/\\]/).pop();
+  // 名称状态只保存 stem，防止标签页和 KSH 内嵌名称重复扩展名。
+  return fileName.replace(/(?:\.(?:ps|vs))+$/i, '');
+}
+
+function shaderFileName(stage) {
+  const name = stage === 'ps' ? psName.value : vsName.value;
+  return `${processFileName(name) || 'untitled'}.${stage}`;
+}
+
+function refreshModified(stage) {
+  const isPs = stage === 'ps';
+  const editor = isPs ? psEditor.value : vsEditor.value;
+  const contentSavePoint = isPs ? psSavePoint.value : vsSavePoint.value;
+  const name = processFileName(isPs ? psName.value : vsName.value);
+  const nameSavePoint = isPs ? psNameSavePoint.value : vsNameSavePoint.value;
+  const modified = (editor?.getValue() || '') !== contentSavePoint || name !== nameSavePoint;
+  if (isPs) {
+    psModified.value = modified;
+  } else {
+    vsModified.value = modified;
+  }
+}
+
+function captureStageState(stage) {
+  const isPs = stage === 'ps';
+  return {
+    content: (isPs ? psEditor.value : vsEditor.value)?.getValue() || '',
+    name: processFileName(isPs ? psName.value : vsName.value),
+  };
+}
+
+function stageStateMatches(stage, snapshot) {
+  const current = captureStageState(stage);
+  return current.content === snapshot.content && current.name === snapshot.name;
+}
+
+function stageIsModified(stage) {
+  return stage === 'ps' ? psModified.value : vsModified.value;
+}
+
+function beginStageSave(stage) {
+  stageLoadGeneration[stage] += 1;
+  kshSaveGeneration += 1;
+  stageSaveGeneration[stage] += 1;
+  return stageSaveGeneration[stage];
+}
+
+function stageSaveIsCurrent(stage, generation) {
+  return stageSaveGeneration[stage] === generation;
+}
+
+function serializeStageSave(stage, operation) {
+  const queued = stageSaveTail[stage].catch(() => {}).then(operation);
+  stageSaveTail[stage] = queued;
+  return queued;
+}
+
+function beginStageLoad(stages) {
+  const generations = {};
+  for (const stage of stages) {
+    stageLoadGeneration[stage] += 1;
+    generations[stage] = stageLoadGeneration[stage];
+  }
+  return generations;
+}
+
+function invalidateSavesForLoadedStages(stages) {
+  kshSaveGeneration += 1;
+  for (const stage of stages) {
+    stageSaveGeneration[stage] += 1;
+  }
+}
+
+function loadRequestCanCommit(stages, generations, snapshots) {
+  const superseded = stages.some(stage => stageLoadGeneration[stage] !== generations[stage]);
+  const changed = stages.some(stage => !stageStateMatches(stage, snapshots[stage]));
+  return { canCommit: !superseded && !changed, superseded, changed };
+}
+
+function rejectStaleLoad(label, status) {
+  showError.value = true;
+  errorMessage.value = status.changed
+    ? `${label}结果未应用：读取期间着色器内容或名称发生了变化，请重新打开文件。`
+    : `${label}结果未应用：等待期间启动了更新的文件操作。`;
+}
+
+function beginKshSave() {
+  stageLoadGeneration.ps += 1;
+  stageLoadGeneration.vs += 1;
+  stageSaveGeneration.ps += 1;
+  stageSaveGeneration.vs += 1;
+  kshSaveGeneration += 1;
+  return {
+    ksh: kshSaveGeneration,
+    ps: stageSaveGeneration.ps,
+    vs: stageSaveGeneration.vs,
+  };
+}
+
+function kshSaveIsCurrent(generations) {
+  return kshSaveGeneration === generations.ksh
+    && stageSaveGeneration.ps === generations.ps
+    && stageSaveGeneration.vs === generations.vs;
+}
+
+function serializeKshSave(operation) {
+  const queued = kshSaveTail.catch(() => {}).then(operation);
+  kshSaveTail = queued;
+  return queued;
+}
+
+function requireFileExtension(filePath, extension) {
+  const path = String(filePath || '');
+  if (!path.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
+    throw new Error(`文件必须使用 .${extension} 扩展名: ${path}`);
+  }
+  return path;
+}
+
+function prepareSavePath(filePath, extension) {
+  const path = String(filePath || '');
+  if (path.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
+    return path;
+  }
+
+  const fileName = path.split(/[/\\]/).pop();
+  if (fileName && fileName.lastIndexOf('.') <= 0) {
+    return `${path}.${extension}`;
+  }
+  throw new Error(`输出文件必须使用 .${extension} 扩展名: ${path}`);
 }
 
 // 添加通用的保存提示方法
@@ -356,107 +526,144 @@ const showSaveConfirm = (fileName, callback) => {
   confirmCallback.value = callback;
 };
 
+const handleConfirmAction = async (action) => {
+  showConfirm.value = false;
+  const callback = confirmCallback.value;
+  confirmCallback.value = null;
+
+  // 等待关闭动画，避免保存对话框与确认框叠在一起。
+  await new Promise(resolve => setTimeout(resolve, 200));
+  if (callback) {
+    await callback(action);
+  }
+};
+
+function clearPendingOperation() {
+  saveQueue.value = [];
+  currentSaveFile.value = null;
+  pendingOperation.value = null;
+  pendingOperationStages = [];
+  discardedStageStates.clear();
+}
+
+function stageNeedsSavePrompt(stage) {
+  refreshModified(stage);
+  if (!stageIsModified(stage)) return false;
+  return !discardedStageStates.has(stage)
+    || !stageStateMatches(stage, discardedStageStates.get(stage));
+}
+
+function collectSaveQueue(stages) {
+  return [...new Set(stages)]
+    .filter(stageNeedsSavePrompt)
+    .map(stage => ({ stage, displayName: shaderFileName(stage) }));
+}
+
+async function runAfterSavePrompts(operation, stages) {
+  if (pendingOperation.value) {
+    showError.value = true;
+    errorMessage.value = '另一个打开或关闭操作仍在进行，请完成后重试。';
+    return false;
+  }
+
+  pendingOperation.value = operation;
+  pendingOperationStages = [...new Set(stages)];
+  discardedStageStates.clear();
+  saveQueue.value = collectSaveQueue(pendingOperationStages);
+  await processSaveQueue();
+  return true;
+}
+
 // 修改处理保存队列的函数
 const processSaveQueue = async () => {
   if (saveQueue.value.length === 0) {
+    currentSaveFile.value = null;
     if (pendingOperation.value) {
+      const newlyDirty = collectSaveQueue(pendingOperationStages);
+      if (newlyDirty.length > 0) {
+        saveQueue.value = newlyDirty;
+        await processSaveQueue();
+        return;
+      }
+
       const operation = pendingOperation.value;
-      pendingOperation.value = null;
-      await operation();
+      try {
+        await operation();
+      } finally {
+        if (pendingOperation.value === operation) clearPendingOperation();
+      }
     }
     return;
   }
 
-  const file = saveQueue.value[0];
-  currentSaveFile.value = file;
-  showSaveConfirm(file, async (action) => {
-    if (action === 'save') {
-      await handleSaveConfirm();
-    } else if (action === 'discard') {
-      await handleDiscardConfirm();
-    } else if (action === 'cancel') {
-      handleCancelConfirm();
+  const entry = saveQueue.value[0];
+  const promptedState = captureStageState(entry.stage);
+  currentSaveFile.value = entry.displayName;
+  showSaveConfirm(entry.displayName, async (action) => {
+    if (action === 'cancel') {
+      clearPendingOperation();
+      return;
     }
-  });
-};
 
-const handleSaveConfirm = async () => {
-  showConfirm.value = false;
-  // 等待动画完成
-  await new Promise(resolve => setTimeout(resolve, 200));
-  
-  const file = saveQueue.value[0];
-  if (file === 'ps') {
-    await handleSave();
-  } else if (file === 'vs') {
-    await handleSave();
-  }
-  
-  saveQueue.value.shift();
-  // 等待一小段时间再显示下一个对话框
-  await new Promise(resolve => setTimeout(resolve, 100));
-  processSaveQueue();
-};
+    if (action === 'save') {
+      if (!(await handleSave(entry.stage))) {
+        clearPendingOperation();
+        return;
+      }
+      if (stageIsModified(entry.stage)) {
+        await processSaveQueue();
+        return;
+      }
+      discardedStageStates.delete(entry.stage);
+    } else if (action === 'discard' && !stageStateMatches(entry.stage, promptedState)) {
+      await processSaveQueue();
+      return;
+    } else if (action === 'discard') {
+      discardedStageStates.set(entry.stage, promptedState);
+    }
 
-const handleDiscardConfirm = () => {
-  showConfirm.value = false;
-  // 等待动画完成
-  setTimeout(() => {
     saveQueue.value.shift();
-    // 等待一小段时间再显示下一个对话框
-    setTimeout(() => {
-      processSaveQueue();
-    }, 100);
-  }, 200);
-};
-
-const handleCancelConfirm = () => {
-  showConfirm.value = false;
-  // 等待动画完成
-  setTimeout(() => {
-    saveQueue.value = [];
-    pendingOperation.value = null;
-  }, 200);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await processSaveQueue();
+  });
 };
 
 // 修改打开 KSH 函数
 async function handleOpenKsh() {
-  const unsavedFiles = [];
-  if (psModified.value) unsavedFiles.push(`${psName.value}.ps`);
-  if (vsModified.value) unsavedFiles.push(`${vsName.value}.vs`);
-  
-  if (unsavedFiles.length > 0) {
-    saveQueue.value = [...unsavedFiles];
-    currentSaveFile.value = saveQueue.value[0];
-    pendingOperation.value = doOpenKsh;
-    
-    showSaveConfirm(currentSaveFile.value, async (action) => {
-      if (action === 'save') {
-        await handleSaveConfirm();
-      } else if (action === 'discard') {
-        await handleDiscardConfirm();
-      } else if (action === 'cancel') {
-        handleCancelConfirm();
-      }
-    });
-    return;
-  }
-  
-  await doOpenKsh();
+  await runAfterSavePrompts(doOpenKsh, ['ps', 'vs']);
 }
 
 // 添加实际打开 KSH 函数
 async function doOpenKsh() {
   try {
+    const stages = ['ps', 'vs'];
+    const snapshots = {
+      ps: captureStageState('ps'),
+      vs: captureStageState('vs'),
+    };
     const filePath = await openFileDialog({
       title: '打开 KSH 文件',
       defaultPath: currentKshPath.value
     });
     
     if (!filePath) return;
-    
+
+    requireFileExtension(filePath, 'ksh');
+    if (stages.some(stage => !stageStateMatches(stage, snapshots[stage]))) {
+      rejectStaleLoad('KSH 导入', { changed: true });
+      return;
+    }
+    const loadGenerations = beginStageLoad(stages);
     const result = await analyzeKsh(filePath);
+    const loadStatus = loadRequestCanCommit(stages, loadGenerations, snapshots);
+    if (!loadStatus.canCommit) {
+      rejectStaleLoad('KSH 导入', loadStatus);
+      return;
+    }
+
+    invalidateSavesForLoadedStages(stages);
     currentKshPath.value = filePath;
+    baseKshPath.value = filePath;
     
     // 更新编辑器内容和保存点
     if (psEditor.value) {
@@ -471,14 +678,15 @@ async function doOpenKsh() {
     // 更新标签页名称
     psName.value = processFileName(result.ps.name);
     vsName.value = processFileName(result.vs.name);
+    psNameSavePoint.value = psName.value;
+    vsNameSavePoint.value = vsName.value;
     
     // 重置文件路径
     currentPsPath.value = '';
     currentVsPath.value = '';
     
-    // 设置两个文件为未保存状态
-    psModified.value = true;
-    vsModified.value = true;
+    refreshModified('ps');
+    refreshModified('vs');
   } catch (error) {
     showError.value = true;
     errorMessage.value = `打开 KSH 文件失败: ${error}`;
@@ -489,32 +697,44 @@ async function doOpenKsh() {
 async function handleSaveKsh() {
   try {
     // 使用标题作为默认文件名
-    const defaultFileName = psName.value || 'untitled';
+    const defaultFileName = processFileName(psName.value) || 'untitled';
     const filePath = await saveFileDialog({
       title: '保存 KSH 文件',
       defaultPath: currentKshPath.value || `${defaultFileName}.ksh`
     });
     
     if (!filePath) return;
+    const outputPath = prepareSavePath(filePath, 'ksh');
     
     // 直接获取当前编辑器内容
     const psContent = psEditor.value?.getValue() || '';
     const vsContent = vsEditor.value?.getValue() || '';
     
     // 使用标题作为文件名
-    const psShaderName = psName.value || 'untitled.ps';
-    const vsShaderName = vsName.value || 'untitled.vs';
+    const psShaderName = shaderFileName('ps');
+    const vsShaderName = shaderFileName('vs');
+    const metadataSource = baseKshPath.value || null;
+    const saveGenerations = beginKshSave();
     
     // 直接调用后端构建KSH
-    await buildKsh({
-      output_path: filePath,
+    await serializeKshSave(() => buildKsh({
+      output_path: outputPath,
+      base_ksh_path: metadataSource,
       vs_name: vsShaderName,
       vs_content: vsContent,
       ps_name: psShaderName,
       ps_content: psContent
-    });
+    }));
+    if (!kshSaveIsCurrent(saveGenerations)) return;
     
-    currentKshPath.value = filePath;
+    currentKshPath.value = outputPath;
+    baseKshPath.value = outputPath;
+    psSavePoint.value = psContent;
+    vsSavePoint.value = vsContent;
+    psNameSavePoint.value = processFileName(psShaderName);
+    vsNameSavePoint.value = processFileName(vsShaderName);
+    refreshModified('ps');
+    refreshModified('vs');
   } catch (error) {
     showError.value = true;
     errorMessage.value = `保存 KSH 文件失败: ${error}`;
@@ -523,24 +743,14 @@ async function handleSaveKsh() {
 
 // 修改打开 PS 函数
 async function handleOpenPs() {
-  if (psModified.value) {
-    showSaveConfirm(`${psName.value}.ps`, async (action) => {
-      showConfirm.value = false;
-      if (action === 'save') {
-        await handleSave();
-        await doOpenPs();
-      } else if (action === 'discard') {
-        await doOpenPs();
-      }
-    });
-    return;
-  }
-  await doOpenPs();
+  await runAfterSavePrompts(doOpenPs, ['ps']);
 }
 
 // 添加实际打开 PS 函数
 async function doOpenPs() {
   try {
+    const stages = ['ps'];
+    const snapshots = { ps: captureStageState('ps') };
     const filePath = await openFileDialog({
       title: '打开 PS 文件',
       defaultPath: currentPsPath.value,
@@ -551,8 +761,21 @@ async function doOpenPs() {
     });
     
     if (!filePath) return;
-    
+
+    requireFileExtension(filePath, 'ps');
+    if (!stageStateMatches('ps', snapshots.ps)) {
+      rejectStaleLoad('PS 打开', { changed: true });
+      return;
+    }
+    const loadGenerations = beginStageLoad(stages);
     const content = await readFile(filePath);
+    const loadStatus = loadRequestCanCommit(stages, loadGenerations, snapshots);
+    if (!loadStatus.canCommit) {
+      rejectStaleLoad('PS 打开', loadStatus);
+      return;
+    }
+
+    invalidateSavesForLoadedStages(stages);
     if (psEditor.value) {
       psEditor.value.setValue(content);
       psSavePoint.value = content; // 设置保存点
@@ -560,7 +783,8 @@ async function doOpenPs() {
     
     currentPsPath.value = filePath;
     psName.value = processFileName(filePath);
-    psModified.value = false;
+    psNameSavePoint.value = psName.value;
+    refreshModified('ps');
   } catch (error) {
     showError.value = true;
     errorMessage.value = `打开 PS 文件失败: ${error}`;
@@ -569,24 +793,14 @@ async function doOpenPs() {
 
 // 修改打开 VS 函数
 async function handleOpenVs() {
-  if (vsModified.value) {
-    showSaveConfirm(`${vsName.value}.vs`, async (action) => {
-      showConfirm.value = false;
-      if (action === 'save') {
-        await handleSave();
-        await doOpenVs();
-      } else if (action === 'discard') {
-        await doOpenVs();
-      }
-    });
-    return;
-  }
-  await doOpenVs();
+  await runAfterSavePrompts(doOpenVs, ['vs']);
 }
 
 // 添加实际打开 VS 函数
 async function doOpenVs() {
   try {
+    const stages = ['vs'];
+    const snapshots = { vs: captureStageState('vs') };
     const filePath = await openFileDialog({
       title: '打开 VS 文件',
       defaultPath: currentVsPath.value,
@@ -597,8 +811,21 @@ async function doOpenVs() {
     });
     
     if (!filePath) return;
-    
+
+    requireFileExtension(filePath, 'vs');
+    if (!stageStateMatches('vs', snapshots.vs)) {
+      rejectStaleLoad('VS 打开', { changed: true });
+      return;
+    }
+    const loadGenerations = beginStageLoad(stages);
     const content = await readFile(filePath);
+    const loadStatus = loadRequestCanCommit(stages, loadGenerations, snapshots);
+    if (!loadStatus.canCommit) {
+      rejectStaleLoad('VS 打开', loadStatus);
+      return;
+    }
+
+    invalidateSavesForLoadedStages(stages);
     if (vsEditor.value) {
       vsEditor.value.setValue(content);
       vsSavePoint.value = content; // 设置保存点
@@ -606,32 +833,65 @@ async function doOpenVs() {
     
     currentVsPath.value = filePath;
     vsName.value = processFileName(filePath);
-    vsModified.value = false;
+    vsNameSavePoint.value = vsName.value;
+    refreshModified('vs');
   } catch (error) {
     showError.value = true;
     errorMessage.value = `打开 VS 文件失败: ${error}`;
   }
 }
 
+async function closeAfterSavePrompts() {
+  closeApproved = true;
+  try {
+    await appWindow.close();
+  } catch (error) {
+    closeApproved = false;
+    showError.value = true;
+    errorMessage.value = `关闭窗口失败: ${error}`;
+  }
+}
+
+async function handleCloseRequested(event) {
+  if (closeApproved) return;
+
+  if (showConfirm.value || pendingOperation.value) {
+    event.preventDefault();
+    return;
+  }
+  if (!psModified.value && !vsModified.value) return;
+
+  event.preventDefault();
+  await runAfterSavePrompts(closeAfterSavePrompts, ['ps', 'vs']);
+}
+
 // 初始化
-onMounted(() => {
+onMounted(async () => {
   initGlslLanguage();
   
   // 初始化 PS 编辑器
   psEditor.value = initEditor(psEditorContainer.value, '// PS 着色器代码');
+  psSavePoint.value = psEditor.value.getValue();
+  psNameSavePoint.value = processFileName(psName.value);
   setupEditorChangeListener(psEditor.value, true);
 
   // 初始化 VS 编辑器
   vsEditor.value = initEditor(vsEditorContainer.value, '// VS 着色器代码');
+  vsSavePoint.value = vsEditor.value.getValue();
+  vsNameSavePoint.value = processFileName(vsName.value);
   setupEditorChangeListener(vsEditor.value, false);
 
   // 添加全局快捷键监听
   window.addEventListener('keydown', handleKeyDown);
+  unlistenCloseRequested = await appWindow.onCloseRequested(handleCloseRequested);
 });
 
 // 在组件卸载时移除事件监听
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  unlistenCloseRequested?.();
+  psEditor.value?.dispose();
+  vsEditor.value?.dispose();
 });
 </script>
 
@@ -648,7 +908,7 @@ onUnmounted(() => {
                 active: activeTab === 'ps',
                 modified: psModified 
               }"
-              @dblclick="handleDoubleClick"
+              @dblclick="handleDoubleClick($event, 'ps')"
               @mouseenter="showPsPathTooltip = true"
               @mouseleave="showPsPathTooltip = false"
             >
@@ -660,12 +920,13 @@ onUnmounted(() => {
                   v-else
                   v-model="psName"
                   class="filename-input"
+                  @input="refreshModified('ps')"
                   @blur="finishEditing"
                   @keyup.enter="finishEditing"
                 />
               </div>
               <div v-if="activeTab === 'ps'" class="tab-actions">
-                <button class="icon-button edit" @click="startEditing" title="编辑文件名">
+                <button class="icon-button edit" @click="startEditing($event, 'ps')" title="编辑文件名">
                   <span class="icon">✎</span>
                 </button>
               </div>
@@ -680,7 +941,7 @@ onUnmounted(() => {
                 active: activeTab === 'vs',
                 modified: vsModified 
               }"
-              @dblclick="handleDoubleClick"
+              @dblclick="handleDoubleClick($event, 'vs')"
             >
               <div class="tab-content" @click="switchTab('vs')">
                 <span v-if="!editingFileName || activeTab !== 'vs'" class="tab-text">
@@ -690,12 +951,13 @@ onUnmounted(() => {
                   v-else
                   v-model="vsName"
                   class="filename-input"
+                  @input="refreshModified('vs')"
                   @blur="finishEditing"
                   @keyup.enter="finishEditing"
                 />
               </div>
               <div v-if="activeTab === 'vs'" class="tab-actions">
-                <button class="icon-button edit" @click="startEditing" title="编辑文件名">
+                <button class="icon-button edit" @click="startEditing($event, 'vs')" title="编辑文件名">
                   <span class="icon">✎</span>
                 </button>
               </div>
@@ -719,10 +981,10 @@ onUnmounted(() => {
             >
               <span class="icon">📂</span>
             </button>
-            <button class="icon-button" title="保存文件 (Ctrl+S)" @click="handleSave">
+            <button class="icon-button" title="保存文件 (Ctrl+S)" @click="handleSave()">
               <span class="icon">💾</span>
             </button>
-            <button class="icon-button primary" title="另存为" @click="handleSaveAs">
+            <button class="icon-button primary" title="另存为" @click="handleSaveAs()">
               <span class="icon">💾</span>
             </button>
             <div class="separator"></div>
@@ -777,9 +1039,9 @@ onUnmounted(() => {
       :title="confirmTitle"
       :message="confirmMessage"
       :file="currentSaveFile"
-      @save="handleSaveConfirm"
-      @discard="handleDiscardConfirm"
-      @cancel="handleCancelConfirm"
+      @save="handleConfirmAction('save')"
+      @discard="handleConfirmAction('discard')"
+      @cancel="handleConfirmAction('cancel')"
     />
   </div>
 </template>

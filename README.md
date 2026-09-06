@@ -13,15 +13,29 @@ dst-ksh-analyze 是一个用于分析和构建《饥荒联机版》着色器文�
 
 ### 解析 ksh 文件
 - 从 .ksh 文件中提取顶点着色器（.vs）和像素着色器（.ps）的内容
+- 严格解析 effect、完整 uniform 表、默认值原始位和 VS/PS 索引，并检查文件是否恰好解析到末尾
+- 识别官方格式的 `0..45` 类型码；未知 scope/type 也可无损读取和重新编码
+- 解包时检查 Windows 可移植文件名，并把 VS/PS 作为一组暂存、提交；普通 I/O 失败会回滚旧文件
 
 ### 构建 ksh 文件
 - 支持从包含着色器文件的目录构建
 - 支持从两个独立的着色器文件构建
+- 支持 GLSL 标量、向量、方阵/非方阵、整数向量和四类 sampler 的 KSH 类型映射
+- 支持把数值字面量及数值构造器形式的 uniform 初始化值写成 KSH float32 默认值
+- 按 GLSL 词法作用域识别实际引用的 uniform；局部变量和函数参数遮蔽不会误占 sampler 槽位
+- 区分标量与单元素数组，避免 `float X` 和 `float X[1]` 共用错误的默认值布局
+
+这里的“构建”是生成当前游戏发布资产所用的 GLSL KSH 容器，不会调用 Mod Tools 中面向 Cg 的旧 `ShaderCompiler.exe`。复杂常量表达式若无法可靠求值会返回错误，不会静默改写成零。
+
+当前构建器不是显卡驱动的完整 GLSL 语义编译器。它会保守保留只在未调用函数中出现的 uniform；异型矩阵转换、声明类型不匹配的构造器和无法确定语义的初始化表达式会明确拒绝，最终 shader 编译与链接仍需由游戏或后续预览器验证。
+
+KSH 的“可编码类型”也不等于当前 DST 的“可运行类型”。当前 Windows 客户端动态上传只确认类型码 `0..8`、`10`、`15`、`20`，sampler `42..45` 走另一条绑定路径；但当前 GLES2 源码实际应优先使用 `float`、`vec2/3/4`、`mat2/3/4`、`sampler2D` 和 `samplerCube`。整数类型、非方阵及 `sampler1D/3D` 可用于容器研究和无损处理，不应在没有运行验证时当作可用的模组 shader 类型。
 
 ### 图形界面功能
 - 内置代码编辑器，支持 GLSL 语法高亮
-- 实时编辑和预览着色器代码
+- 支持 VS/PS 标签页切换编辑
 - 支持从 KSH 文件导入和导出
+- 导入后再导出时保留兼容的 effect、uniform 默认值、未知类型/scope 和阶段索引
 - 支持独立保存 VS/PS 文件
 - 支持代码注释、撤销/重做等编辑功能
 
@@ -40,6 +54,28 @@ npm install
 # 构建发布版本
 npm run tauri build
 ```
+
+## 开发验证
+
+在项目根目录运行：
+
+```sh
+# 前端文件操作回归测试，直接执行 App.vue 中的真实逻辑
+node --test tests/editor-file-operations.test.mjs
+
+# Rust 测试；release 模式也需检查，避免依赖 debug_assert 的副作用
+cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+cargo test --release --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+
+# 格式、静态检查和前端生产构建
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+npm run build
+```
+
+Rust 测试包含合成格式样例和本机官方 KSH 样本的逐字节往返检查。官方样本目录不存在时，该部分会跳过；普通测试通过不表示已检查官方样本。前端测试模拟文件对话框、文件系统和编辑器依赖，不代替原生界面手工测试。以上检查均不启动游戏，也不能证明 shader 在游戏中能够编译、链接和正确渲染。
+
+本阶段修复、验证结果与后续预览器边界见 [阶段报告](.Codex/parser-builder-validation-2026-09-07.md)。
 
 ## 直接下载使用
 
@@ -63,7 +99,7 @@ npm run tauri build
    - 查找/替换（Ctrl + F）
 
 3. 界面特性
-   - 双栏布局，左侧 PS 右侧 VS
+   - VS/PS 标签页切换
    - 支持修改着色器名称
    - 文件修改状态提示
    - 保存提醒对话框
@@ -90,6 +126,7 @@ dst-ksh-analyze-cli input.vs input.ps output.ksh
 ✅ 解析与生成ksh文件
 ✅ 移除yaml格式的配置
 ✅ 除了命令行, 额外支持ui界面
+❌ 编辑器内实时渲染着色器预览
 ❌ 支持着色器代码格式化
 ✅ 支持着色器语法检查
 
