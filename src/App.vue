@@ -24,6 +24,7 @@ const cursor = computed(() => positions[state.activeId] || { line: 1, column: 1 
 const editors = {};
 let unlistenClose;
 let unlistenResize;
+let closing = false;
 let closeApproved = false;
 let unmounted = false;
 const visible = id => id === state.primaryId || id === state.secondaryId;
@@ -75,7 +76,7 @@ function handleKeys(event) {
   else if (key === 'e' && event.shiftKey) { event.preventDefault(); actions.exportKsh(); }
 }
 function beforeUnload(event) {
-  if (hasUnsavedChanges.value) { event.preventDefault(); event.returnValue = ''; }
+  if (!closeApproved && hasUnsavedChanges.value) { event.preventDefault(); event.returnValue = ''; }
 }
 watch(() => state.activeId, async id => {
   await nextTick();
@@ -94,11 +95,13 @@ onMounted(async () => {
   if (!desktop) return;
   try {
     const stopListening = await appWindow.onCloseRequested(async event => {
-      if (closeApproved) return;
       event.preventDefault();
+      if (closing) return;
+      closing = true;
       try {
-        if (await actions.canLeave()) { closeApproved = true; await appWindow.close(); }
+        if (await actions.canLeave()) { closeApproved = true; await appWindow.destroy(); }
       } catch (error) { closeApproved = false; actions.notify(String(error.message || error), 'error'); }
+      finally { closing = false; }
     });
     if (unmounted) stopListening(); else unlistenClose = stopListening;
     const stopResize = await appWindow.onResized(syncWindowState);

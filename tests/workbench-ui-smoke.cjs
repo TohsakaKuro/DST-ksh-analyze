@@ -8,7 +8,7 @@ const url = process.env.SHADER_UI_URL || 'http://127.0.0.1:1420';
 fs.mkdirSync(output, { recursive: true });
 
 // Real Vue/Fluent/Monaco, with native file and window operations isolated from disk.
-function mockDesktop() {
+function mockDesktop(permissions) {
   const callbacks = new Map();
   const listeners = new Map();
   let callbackId = 0;
@@ -48,7 +48,11 @@ function mockDesktop() {
         queueMicrotask(() => { void test.requestClose(); });
         return;
       }
-      if (command === 'plugin:window|destroy') return;
+      if (command === 'plugin:window|destroy') {
+        if (!permissions.includes('core:window:allow-destroy')) throw new Error('Window destroy permission missing');
+        if (test.destroyFails) throw new Error('Simulated destroy failure');
+        return;
+      }
       throw new Error('Unexpected native command: ' + command);
     },
   };
@@ -61,7 +65,8 @@ function mockDesktop() {
   const errors = [];
   page.on('pageerror', error => errors.push(error.stack || error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.addInitScript(mockDesktop);
+  const capability = JSON.parse(fs.readFileSync(path.join(__dirname, '../src-tauri/capabilities/default.json'), 'utf8'));
+  await page.addInitScript(mockDesktop, capability.permissions);
   const tool = label => page.locator(`fluent-button[aria-label="${label}"]`);
   const tab = name => page.getByRole('tab').filter({ hasText: name });
   const editor = name => page.locator('.editor-pane').filter({ has: page.getByRole('textbox', { name, exact: true }) });
@@ -294,14 +299,41 @@ function mockDesktop() {
     await dialog('保存更改？').waitFor();
     await action('取消').click();
     assert.equal(await tab('未命名-2').count(), 1, 'titlebar close preserves unsaved content when canceled');
-    await page.evaluate(() => { window.__workbenchTest.closeFails = true; void window.__workbenchTest.requestClose(); });
+    assert.equal((await nativeCalls('plugin:window|destroy')).length, 0);
+    await page.evaluate(() => { window.__workbenchTest.destroyFails = true; void window.__workbenchTest.requestClose(); });
     await dialog('保存更改？').waitFor();
     await action('不保存').click();
-    await page.locator('.operation-notice').getByText('Simulated close failure').waitFor();
+    await page.locator('.operation-notice').getByText('Simulated destroy failure').waitFor();
     await page.evaluate(() => { void window.__workbenchTest.requestClose(); });
     await dialog('保存更改？').waitFor();
     await action('取消').click();
-    assert.equal((await nativeCalls('plugin:window|destroy')).length, 0);
+    assert.equal((await nativeCalls('plugin:window|destroy')).length, 1, 'canceling a retry must not destroy');
+    await page.evaluate(() => { window.__workbenchTest.destroyFails = false; });
+    const closeCount = (await nativeCalls('plugin:window|close')).length;
+    await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
+    await dialog('保存更改？').waitFor();
+    await action('不保存').click();
+    await page.waitForFunction(() => window.__workbenchTest.calls.filter(call => call.command === 'plugin:window|destroy').length === 2);
+    assert.equal((await nativeCalls('plugin:window|close')).length, closeCount + 1, 'confirmed close must not emit a second close request');
+
+    await page.reload();
+    await page.waitForFunction(() => window.__workbenchTest.calls.some(call => call.command === 'plugin:window|is_maximized'));
+    await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
+    await page.waitForFunction(() => window.__workbenchTest.calls.some(call => call.command === 'plugin:window|destroy'));
+    assert.equal(await page.locator('fluent-dialog').count(), 0, 'clean window closes without confirmation');
+
+    await page.reload();
+    await page.waitForFunction(() => window.__workbenchTest.calls.some(call => call.command === 'plugin:window|is_maximized'));
+    await tool('新建文件').click();
+    await append('未命名-1', '// save before closing');
+    await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
+    await dialog('保存更改？').waitFor();
+    await chooseSave('C:/saved/close.glsl');
+    await action(/^\s*保存\s*$/).click();
+    await page.waitForFunction(() => window.__workbenchTest.calls.some(call => call.command === 'plugin:window|destroy'));
+    assert.equal((await nativeCalls('save_editor_source')).at(-1).args.params.content, '// save before closing');
+    const closingCalls = await page.evaluate(() => window.__workbenchTest.calls.map(call => call.command));
+    assert.ok(closingCalls.indexOf('save_editor_source') < closingCalls.indexOf('plugin:window|destroy'));
     assert.deepEqual(errors, []);
     console.log('UI smoke passed: independent tabs, current/all save, chosen-pair export, dirty close protection, split and responsive layouts.');
     console.log('Screenshots:', output);
