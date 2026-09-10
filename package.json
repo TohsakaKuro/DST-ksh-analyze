@@ -1,7 +1,7 @@
 {
   "name": "dst-ksh-analyze",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "饥荒联机版着色器文件分析与构建工具",
   "type": "module",
   "repository": {
