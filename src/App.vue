@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { FilePlus2, FolderOpen, Save, SaveAll, PackageOpen, Undo2, Redo2, Search, Columns2, X, CircleAlert, CircleCheck, Info, FileCode2, Minus, Square, Copy } from '@lucide/vue';
+import { FilePlus2, FolderOpen, Save, SaveAll, PackageOpen, Undo2, Redo2, Search, X, CircleAlert, CircleCheck, Info, FileCode2, SquarePen, Minus, Square, Copy } from '@lucide/vue';
 import CodeEditor from './components/CodeEditor.vue';
 import ToolButton from './components/ToolButton.vue';
 import DocumentDialog from './components/DocumentDialog.vue';
@@ -12,7 +12,7 @@ import { useDocumentActions } from './composables/useDocumentActions.js';
 import appIcon from '../src-tauri/icons/64x64.png';
 
 const workspace = useEditorWorkspace();
-const { state, active, dirtyDocuments, hasUnsavedChanges, split } = workspace;
+const { state, active, dirtyDocuments, hasUnsavedChanges } = workspace;
 const actions = useDocumentActions(workspace);
 const { busy, notice, dialog } = actions;
 const showAbout = ref(false);
@@ -27,7 +27,7 @@ let unlistenResize;
 let closing = false;
 let closeApproved = false;
 let unmounted = false;
-const visible = id => id === state.primaryId || id === state.secondaryId;
+const visible = id => id === state.activeId;
 
 async function syncWindowState() {
   try {
@@ -160,8 +160,7 @@ onBeforeUnmount(() => {
         <span class="toolbar-divider"></span>
         <fluent-button appearance="primary" size="small" :disabled-focusable.camel.prop="Boolean(busy)" :disabled.prop="state.documents.length < 2" @click="actions.exportKsh()"><PackageOpen slot="start" :size="16" aria-hidden="true" />导出 KSH</fluent-button>
       </div>
-      <div class="layout-tools" role="toolbar" aria-label="编辑布局">
-        <ToolButton :icon="Columns2" label="并排编辑" :selected="split" :disabled="state.documents.length < 2" @click="workspace.toggleSplit()" />
+      <div class="layout-tools" role="toolbar" aria-label="应用工具">
         <ToolButton :icon="Info" label="关于" @click="showAbout = true" />
       </div>
       <div v-if="desktop" class="window-controls" role="group" aria-label="窗口控制">
@@ -170,7 +169,7 @@ onBeforeUnmount(() => {
         <button type="button" class="window-control window-close" title="关闭窗口" aria-label="关闭窗口" @click="windowAction('close')"><X aria-hidden="true" /></button>
       </div>
     </header>
-    <main class="editor-workspace" :data-layout="split ? 'split' : 'single'" aria-label="源码编辑器">
+    <main class="editor-workspace" aria-label="源码编辑器">
       <div v-if="state.documents.length" class="file-tabs" role="tablist" aria-label="已打开文件">
         <div v-for="(document, index) in state.documents" :key="document.id" class="file-tab" role="presentation"
           :class="{ 'tab-active': state.activeId === document.id, 'tab-visible': visible(document.id) }"
@@ -181,13 +180,13 @@ onBeforeUnmount(() => {
             <FileCode2 aria-hidden="true" /><span class="tab-name">{{ document.name }}</span><small v-if="workspace.tabDetail(document)" class="tab-detail">{{ workspace.tabDetail(document) }}</small>
             <span v-if="workspace.isDirty(document)" class="modified-dot" aria-label="未保存"></span>
           </button>
+          <ToolButton class="tab-edit" :icon="SquarePen" :label="`重命名 ${document.name}`" tabindex="-1" :disabled="Boolean(busy)" @click="actions.renameFile(document.id)" />
           <ToolButton class="tab-close" :icon="X" :label="`关闭 ${document.name}`" tabindex="-1" :disabled="Boolean(busy)" @click="actions.closeFile(document.id)" />
         </div>
       </div>
       <div v-if="state.documents.length" class="editor-panes">
         <section v-for="document in state.documents" :id="`file-panel-${document.id}`" :key="document.id" v-show="visible(document.id)" class="editor-pane"
-          role="tabpanel" :aria-labelledby="`file-tab-${document.id}`" :data-document-id="document.id" :data-right="document.id === state.secondaryId"
-          :style="{ '--pane-column': split && document.id === state.secondaryId ? 2 : 1 }">
+          role="tabpanel" :aria-labelledby="`file-tab-${document.id}`" :data-document-id="document.id">
           <CodeEditor :ref="editor => editors[document.id] = editor" :model-value="document.content" :filename="document.name" :document-id="document.id" :active="visible(document.id)"
             @update:model-value="workspace.setContent(document.id, $event)" @focus="workspace.activate(document.id)" @cursor="positions[document.id] = $event" />
         </section>

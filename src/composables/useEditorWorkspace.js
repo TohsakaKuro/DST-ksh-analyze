@@ -2,7 +2,7 @@ import { computed, reactive } from 'vue';
 import { directoryName, extension, fileName, pathKey } from '../utils/file-paths.js';
 
 export function useEditorWorkspace() {
-  const state = reactive({ documents: [], activeId: null, primaryId: null, secondaryId: null, lastExport: null });
+  const state = reactive({ documents: [], activeId: null, lastExport: null });
   const origins = new Map();
   let nextId = 0;
   let nextOrigin = 0;
@@ -13,14 +13,9 @@ export function useEditorWorkspace() {
   const active = computed(() => get(state.activeId) || null);
   const dirtyDocuments = computed(() => state.documents.filter(isDirty));
   const hasUnsavedChanges = computed(() => dirtyDocuments.value.length > 0);
-  const split = computed(() => state.secondaryId !== null);
 
   function activate(id) {
     if (!get(id)) return;
-    if (id !== state.primaryId && id !== state.secondaryId) {
-      if (state.secondaryId !== null && state.activeId === state.secondaryId) state.secondaryId = id;
-      else state.primaryId = id;
-    }
     state.activeId = id;
   }
 
@@ -69,40 +64,49 @@ export function useEditorWorkspace() {
   function markSaved(saved, path) {
     const current = saved && get(saved.id);
     if (!current) return false;
+    const pathChanged = pathKey(path) !== pathKey(saved.path);
     current.path = path;
-    current.name = fileName(path);
+    if (pathChanged) current.name = fileName(path);
     current.savedContent = saved.content;
     return true;
   }
   function setContent(id, value) { const document = get(id); if (document) document.content = value; }
+
+  function rename(id, name) {
+    const document = get(id);
+    const value = String(name || '').trim();
+    if (!document) return false;
+    if (!value) throw new Error('文件名不能为空');
+    if (/[/\\\0]/.test(value)) throw new Error('文件名不能包含路径分隔符或空字符');
+    document.name = value;
+    return true;
+  }
 
   function remove(ids) {
     const targets = new Set(ids);
     const activeIndex = state.documents.findIndex(document => document.id === state.activeId);
     state.documents = state.documents.filter(document => !targets.has(document.id));
     const nearest = state.documents[Math.min(Math.max(activeIndex, 0), state.documents.length - 1)]?.id ?? null;
-    if (!get(state.primaryId)) state.primaryId = get(state.secondaryId)?.id ?? nearest;
-    if (!get(state.secondaryId) || state.secondaryId === state.primaryId) state.secondaryId = null;
-    if (!get(state.activeId)) state.activeId = state.primaryId;
+    if (!get(state.activeId)) state.activeId = nearest;
     for (const id of origins.keys()) if (!state.documents.some(document => document.origin?.id === id)) origins.delete(id);
     if (state.lastExport && (!get(state.lastExport.vsId) || !get(state.lastExport.psId))) state.lastExport = null;
   }
 
-  function toggleSplit() {
-    if (split.value) { state.primaryId = state.activeId; state.secondaryId = null; return; }
-    const other = state.documents.find(document => document.id !== state.activeId);
-    if (other) { state.primaryId = state.activeId; state.secondaryId = other.id; }
-  }
   function cycle(offset) {
     const count = state.documents.length;
     if (count) activate(state.documents[(state.documents.findIndex(document => document.id === state.activeId) + offset + count) % count].id);
   }
   function stageHint(document) {
     const ext = extension(document.name);
-    return ['vs', 'ps'].includes(ext) ? ext : document.origin?.stage || null;
+    if (['vs', 'ps'].includes(ext)) return ext;
+    const pathExt = extension(document.path);
+    return ['vs', 'ps'].includes(pathExt) ? pathExt : document.origin?.stage || null;
   }
   function candidates(stage) { return state.documents.filter(document => !stageHint(document) || stageHint(document) === stage); }
-  function sourceLabel(document) { return document.path || (document.origin ? `${document.origin.path} / ${document.name}` : document.name); }
+  function sourceLabel(document) {
+    if (document.path) return document.name === fileName(document.path) ? document.path : `${document.name} / ${document.path}`;
+    return document.origin ? `${document.origin.path} / ${document.name}` : document.name;
+  }
   function tabDetail(document) {
     if (!state.documents.some(other => other.id !== document.id && other.name === document.name)) return '';
     return document.origin ? fileName(document.origin.path) : directoryName(document.path).replace(/[/\\]$/, '').split(/[/\\]/).pop() || `#${document.id}`;
@@ -119,6 +123,6 @@ export function useEditorWorkspace() {
       rebuildMetadata: Boolean((vs.origin || ps.origin) && !sameOrigin) };
   }
 
-  return { state, active, dirtyDocuments, hasUnsavedChanges, split, get, findPath, isDirty, activate, addSource, addKsh,
-    snapshot, matches, markSaved, setContent, remove, toggleSplit, cycle, stageHint, candidates, sourceLabel, tabDetail, exportSnapshot };
+  return { state, active, dirtyDocuments, hasUnsavedChanges, get, findPath, isDirty, activate, addSource, addKsh,
+    snapshot, matches, markSaved, setContent, rename, remove, cycle, stageHint, candidates, sourceLabel, tabDetail, exportSnapshot };
 }

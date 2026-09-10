@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import AppDialog from './AppDialog.vue';
 
 const props = defineProps({ model: { type: Object, required: true } });
@@ -13,9 +13,15 @@ function initial(stage) {
 }
 const selected = reactive({ vs: initial('vs'), ps: initial('ps') });
 if (selected.ps === selected.vs) selected.ps = null;
+const renameValue = ref(props.model.name || '');
 const valid = computed(() => selected.vs != null && selected.ps != null && selected.vs !== selected.ps);
+const renameValid = computed(() => {
+  const value = renameValue.value.trim();
+  return value.length > 0 && !value.includes('/') && !value.includes('\\') && !value.includes('\0');
+});
 const title = computed(() => props.model.title || ({ export: '导出 KSH', unsaved: '保存更改？', overwrite: '替换现有文件？', metadata: '重新组合源码？' })[props.model.kind]);
 function submit() { if (valid.value) emit('resolve', { vsId: selected.vs, psId: selected.ps }); }
+function submitRename() { if (renameValid.value) emit('resolve', renameValue.value.trim()); }
 </script>
 
 <template>
@@ -28,11 +34,17 @@ function submit() { if (valid.value) emit('resolve', { vsId: selected.vs, psId: 
             :class="{ 'option-selected': selected[stage] === document.id, 'option-disabled': selected[stage === 'vs' ? 'ps' : 'vs'] === document.id }">
             <input v-model="selected[stage]" type="radio" :name="stage" :value="document.id"
               :disabled="selected[stage === 'vs' ? 'ps' : 'vs'] === document.id" :aria-label="document.name" />
-            <span class="source-option-text"><span>{{ document.name }}</span><small v-if="document.label !== document.name">{{ document.label }}</small></span>
+            <span class="source-option-text"><span class="source-option-name">{{ document.name }}</span><small v-if="document.path">{{ document.path }}</small></span>
           </label>
           <p v-if="!model.candidates[stage].length" class="no-candidates">无可选文件</p>
         </div>
       </fieldset>
+    </form>
+    <form v-else-if="model.kind === 'rename'" class="rename-form" @submit.prevent="submitRename">
+      <label for="rename-file-name">文件名</label>
+      <input id="rename-file-name" v-model="renameValue" type="text" autocomplete="off" autofocus />
+      <p v-if="renameValue.trim().length === 0" class="form-error">文件名不能为空</p>
+      <p v-else-if="!renameValid" class="form-error">文件名不能包含路径分隔符或空字符</p>
     </form>
     <ul v-else-if="model.kind === 'unsaved'" class="file-list"><li v-for="name in model.names" :key="name">{{ name }}</li></ul>
     <ul v-else-if="model.kind === 'overwrite'" class="file-list"><li v-for="path in model.paths" :key="path">{{ path }}</li></ul>
@@ -46,6 +58,7 @@ function submit() { if (valid.value) emit('resolve', { vsId: selected.vs, psId: 
       <fluent-button v-else-if="model.kind === 'overwrite'" appearance="primary" @click="emit('resolve', true)">替换</fluent-button>
       <fluent-button v-else-if="model.kind === 'metadata'" appearance="primary" @click="emit('resolve', true)">继续</fluent-button>
       <fluent-button v-else-if="model.kind === 'error'" appearance="primary" autofocus @click="emit('resolve', true)">确定</fluent-button>
+      <fluent-button v-else-if="model.kind === 'rename'" appearance="primary" :disabled.prop="!renameValid" @click="submitRename">重命名</fluent-button>
       <fluent-button v-else appearance="primary" :disabled.prop="!valid" @click="submit">导出…</fluent-button>
       <fluent-button v-if="model.kind !== 'error'" @click="emit('resolve', null)">取消</fluent-button>
     </template>

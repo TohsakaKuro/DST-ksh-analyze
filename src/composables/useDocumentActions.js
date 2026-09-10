@@ -137,7 +137,8 @@ export function useDocumentActions(workspace, io = desktop) {
       if (workspace.state.documents.length < 2) return false;
       const previous = workspace.state.lastExport;
       const candidates = Object.fromEntries(['vs', 'ps'].map(stage => [stage, workspace.candidates(stage).map(document => ({
-        id: document.id, name: document.name, label: workspace.sourceLabel(document), hint: workspace.stageHint(document),
+        id: document.id, name: document.name, label: workspace.sourceLabel(document),
+        path: document.path || document.origin?.path || '', hint: workspace.stageHint(document),
       }))]));
       const selected = await ask('export', { candidates, previous });
       if (!selected) return false;
@@ -169,6 +170,15 @@ export function useDocumentActions(workspace, io = desktop) {
   return {
     busy, notice, dialog, finishDialog, notify, openFiles, exportKsh,
     newFile: () => run('新建文件', () => { workspace.addSource(); return true; }),
+    renameFile: (id = workspace.state.activeId) => run('重命名文件', async () => {
+      const document = workspace.get(id);
+      if (!document) return false;
+      const name = await ask('rename', { title: '重命名文件', name: document.name });
+      if (!name) return false;
+      workspace.rename(id, name);
+      notify('文件名已更新', 'success');
+      return true;
+    }),
     saveFile: (id = workspace.state.activeId, saveAs = false) => run('保存文件', async () => {
       const saved = await saveInternal(id, saveAs);
       if (saved) notify('文件已保存', 'success');

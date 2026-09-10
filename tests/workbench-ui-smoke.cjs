@@ -202,6 +202,10 @@ function mockDesktop(permissions) {
     assert.equal(await action('导出').evaluate(element => element.disabled), true, 'multiple pixel files require explicit selection');
     assert.equal(await dialog('导出 KSH').getByRole('textbox').count(), 0, 'no names to enter');
     await choosePair('base.vs', 'glow.ps');
+    const sourceOption = page.locator('.source-option').first();
+    assert.ok((await sourceOption.getAttribute('title')).includes('C:/src/'), 'source option keeps the full path as its tooltip');
+    assert.equal(await sourceOption.locator('.source-option-text').evaluate(element => getComputedStyle(element).whiteSpace), 'nowrap');
+    assert.notEqual(await page.locator('.source-options').first().evaluate(element => getComputedStyle(element).overflowY), 'visible');
     await capture('workspace-export');
     await chooseSave('C:/exports/glow.ksh');
     await action('导出').click();
@@ -219,16 +223,13 @@ function mockDesktop(permissions) {
     await page.waitForFunction(() => document.querySelector('.status-summary').textContent === '就绪');
     await dismissNotice();
 
-    await tool('并排编辑').click();
-    await waitText('base.vs', 'vertex_edit');
-    await waitText('glow.ps', 'pixel_edit');
-    assert.equal(await page.locator('.stage-heading').count(), 0);
-    await capture('workspace-split');
-    await tab('glow_alt.ps').click();
-    await waitText('glow_alt.ps', 'gl_FragColor');
-    assert.equal(await editor('base.vs').isVisible(), true, 'switch only the active pane');
-    await tool('并排编辑').click();
-    await tab('glow_alt.ps').click({ button: 'middle' });
+    await tool('重命名 glow_alt.ps').click();
+    await dialog('重命名文件').waitFor();
+    await dialog('重命名文件').getByRole('textbox', { name: '文件名' }).fill('alternate.ps');
+    await action('重命名').click();
+    await tab('alternate.ps').waitFor();
+    await waitText('alternate.ps', 'gl_FragColor');
+    await tab('alternate.ps').click({ button: 'middle' });
     assert.equal(await page.getByRole('tab').count(), 2);
     await tab('glow.ps').click();
     await page.keyboard.press('Control+Tab');
@@ -277,12 +278,9 @@ function mockDesktop(permissions) {
       const bounds = await page.locator('.app-header > *').evaluateAll(elements => elements.map(element => { const r = element.getBoundingClientRect(); return [r.left, r.right]; }));
       assert.ok(bounds.every(([left, right]) => left >= 0 && right <= width), 'toolbar overflow at ' + width);
       await capture('workspace-' + width);
-      await tool('并排编辑').click();
-      await capture('workspace-' + width + '-split');
       const panes = await page.locator('.editor-pane:visible').evaluateAll(elements => elements.map(element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
-      assert.equal(panes.length, 2);
-      assert.ok(panes.every(pane => pane.width > 100 && pane.height > 100));
-      await tool('并排编辑').click();
+      assert.equal(panes.length, 1);
+      assert.ok(panes[0].width > 100 && panes[0].height > 100);
       await exportButton.click();
       await dialog('导出 KSH').waitFor();
       const box = await dialog('导出 KSH').boundingBox();
@@ -335,7 +333,7 @@ function mockDesktop(permissions) {
     const closingCalls = await page.evaluate(() => window.__workbenchTest.calls.map(call => call.command));
     assert.ok(closingCalls.indexOf('save_editor_source') < closingCalls.indexOf('plugin:window|destroy'));
     assert.deepEqual(errors, []);
-    console.log('UI smoke passed: independent tabs, current/all save, chosen-pair export, dirty close protection, split and responsive layouts.');
+    console.log('UI smoke passed: independent tabs, rename, current/all save, chosen-pair export, dirty close protection, and responsive layouts.');
     console.log('Screenshots:', output);
   } catch (error) {
     console.log(await page.locator('body').ariaSnapshot());

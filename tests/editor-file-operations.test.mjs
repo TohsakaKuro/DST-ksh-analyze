@@ -18,7 +18,6 @@ test('workspace starts completely empty', () => {
   assert.deepEqual(workspace.state.documents, []);
   assert.equal(workspace.active.value, null);
   assert.equal(workspace.hasUnsavedChanges.value, false);
-  assert.equal(workspace.split.value, false);
 });
 
 test('new files are independent, unnamed and initially clean', () => {
@@ -176,28 +175,20 @@ test('closing active/inactive tabs selects a remaining neighbour and empty close
   workspace.remove([b.id]);
   assert.equal(workspace.state.activeId, c.id);
   workspace.remove([c.id]);
-  assert.equal(workspace.state.primaryId, null);
   assert.equal(workspace.state.activeId, null);
 });
 
-test('split editing follows focused pane without binding any shader pair', () => {
+test('renaming a document updates its tab name without changing its disk path', () => {
   const workspace = useEditorWorkspace();
-  const a = workspace.addSource();
-  workspace.toggleSplit();
-  assert.equal(workspace.split.value, false);
-  const b = workspace.addSource();
-  const c = workspace.addSource();
-  workspace.activate(a.id);
-  workspace.toggleSplit();
-  assert.equal(workspace.state.primaryId, a.id);
-  assert.equal(workspace.state.secondaryId, b.id);
-  workspace.activate(b.id);
-  workspace.activate(c.id);
-  assert.equal(workspace.state.secondaryId, c.id);
-  assert.equal(workspace.state.primaryId, a.id);
-  workspace.remove([a.id]);
-  assert.equal(workspace.state.primaryId, c.id);
-  assert.equal(workspace.split.value, false);
+  const document = workspace.addSource({ path: 'C:/src/effect.vs', content: 'source' });
+  assert.equal(workspace.rename(document.id, 'renamed.vs'), true);
+  assert.equal(document.name, 'renamed.vs');
+  assert.equal(document.path, 'C:/src/effect.vs');
+  assert.equal(workspace.stageHint(document), 'vs');
+  workspace.markSaved(workspace.snapshot(document.id), document.path);
+  assert.equal(document.name, 'renamed.vs');
+  assert.throws(() => workspace.rename(document.id, 'bad/name.vs'), /路径分隔符/);
+  assert.throws(() => workspace.rename(document.id, '   '), /不能为空/);
 });
 
 test('tab cycling wraps and removing export members invalidates remembered selection', () => {

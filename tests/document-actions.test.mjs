@@ -33,6 +33,17 @@ test('new and open append without asking to discard existing unsaved files', asy
   assert.equal(actions.dialog.value, null);
 });
 
+test('rename updates the selected document name without writing a file', async () => {
+  const { workspace, actions, calls } = harness();
+  const document = workspace.addSource({ path: 'C:/src/effect.vs', content: 'source' });
+  const renaming = actions.renameFile(document.id);
+  await answer(actions, 'rename', 'renamed.vs');
+  assert.equal(await renaming, true);
+  assert.equal(document.name, 'renamed.vs');
+  assert.equal(document.path, 'C:/src/effect.vs');
+  assert.equal(calls.saveEditorSource.length, 0);
+});
+
 test('reopening existing source never rereads or replaces its edits', async () => {
   const { workspace, actions, calls } = harness({ openFileDialog: () => ['c:\\A.PS', 'C:/a.ps'] });
   const document = workspace.addSource({ path: 'C:/a.ps', content: 'old' });

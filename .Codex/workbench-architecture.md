@@ -12,15 +12,15 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/composables/useEditorWorkspace.js` | 独立文档列表、活动标签、左右编辑区、源码保存点、导入来源和导出快照 |
+| `src/composables/useEditorWorkspace.js` | 独立文档列表、活动标签、源码保存点、导入来源和导出快照 |
 | `src/composables/useDocumentActions.js` | 打开、当前/全部保存、关闭确认、组合导出和忙状态；可注入 IO 测试 |
 | `src/components/CodeEditor.vue` | 每个文件的 Monaco model、撤销历史、视图状态和编辑命令，不依赖阶段 |
-| `src/components/DocumentDialog.vue` | VS/PS 单选列表、未保存确认、覆盖确认和跨来源元数据提示 |
+| `src/components/DocumentDialog.vue` | VS/PS 单选列表、文件重命名、未保存确认、覆盖确认和跨来源元数据提示 |
 | `src/components/AppDialog.vue` | Fluent 原生模态生命周期、取消和焦点恢复 |
 | `src/App.vue` | 两行工作台、文件标签、菜单快捷键、聚焦和窗口关闭接入 |
 | `src/utils/tauri-commands.js` | 原生文件选择、源码读写和 KSH 构建调用 |
 
-工具按钮使用系统 `title` 提示。Fluent 3.1.3 的 tooltip 延迟回调在卸载后仍可能尝试显示 popover，因此不再注册该组件。文件标签采用标准 tab 语义；关闭按钮是相邻控件，不嵌套在标签按钮中。
+工具按钮使用系统 `title` 提示。Fluent 3.1.3 的 tooltip 延迟回调在卸载后仍可能尝试显示 popover，因此不再注册该组件。文件标签采用标准 tab 语义；重命名和关闭按钮是相邻控件，不嵌套在标签按钮中。
 
 当前未注册 GLSL 语义服务，Monaco 的 `occurrencesHighlight` 显式关闭，保留普通文本选择高亮。Monaco 0.52 的 symbol highlighter 在快速关闭标签时会将未处理的 Delayer 取消暴露为 `Canceled`；通过关闭无提供者的后台功能避免该路径，不使用全局异常屏蔽。
 
@@ -68,6 +68,6 @@
 
 ## 验证
 
-`tests/editor-file-operations.test.mjs` 测试工作台文件模型，`tests/document-actions.test.mjs` 测试模拟 IO 流程，取代旧固定 VS/PS 文档测试。`tests/workbench-ui-smoke.cjs` 运行真实 Vue、Fluent 和 Monaco，以原生 IO mock 检查标签、独立保存、组合导出、关闭保护、并排与窄窗口；不会读写真实 shader。
+`tests/editor-file-operations.test.mjs` 测试工作台文件模型，`tests/document-actions.test.mjs` 测试模拟 IO 流程，取代旧固定 VS/PS 文档测试。`tests/workbench-ui-smoke.cjs` 运行真实 Vue、Fluent 和 Monaco，以原生 IO mock 检查标签、重命名、独立保存、组合导出、关闭保护和窄窗口；不会读写真实 shader。
 
 2026-09-07：44 项前端模型/IO 测试、70 项 release Rust 测试、生产构建及 Clippy 检查通过。浏览器回归通过，包含标签 Home/End 切换、中键关闭、保存和导出流程，以及 1200/1000/736/390/360 宽度下的布局；浏览器错误为零。已检查桌面并排和窄窗口导出截图。实际原生文件选择窗口及游戏渲染未测试。安装依赖时原有 Vite/Rollup/PostCSS/Nanoid 构建链报告 4 项 high 告警，未做范围外自动升级；本地生产静态预览仅监听回环地址。
